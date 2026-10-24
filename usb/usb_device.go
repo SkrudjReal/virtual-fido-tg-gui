@@ -17,14 +17,14 @@ type USBDeviceDelegate interface {
 }
 
 type USBDevice struct {
-	delegate        USBDeviceDelegate
+	delegate      USBDeviceDelegate
 	requestBuffer *util.RequestBuffer
 }
 
 func NewUSBDevice(delegate USBDeviceDelegate) *USBDevice {
 	device := &USBDevice{
-		delegate:        delegate,
-		requestBuffer:   util.MakeRequestBuffer(),
+		delegate:      delegate,
+		requestBuffer: util.MakeRequestBuffer(),
 	}
 	delegate.SetResponseHandler(func(response []byte) {
 		device.handleResponse(response)
@@ -76,7 +76,7 @@ func (device *USBDevice) HandleMessage(id uint32, onFinish func(response []byte)
 		onFinish(reply)
 	case usbEndpointOutput:
 		device.requestBuffer.Request(id, onFinish)
-		util.SetTimeout(1000, func() {
+		util.SetTimeout(3000, func() {
 			// If the request hasn't finished yet, cancel it and return nil
 			if device.requestBuffer.CancelRequest(id) {
 				onFinish(nil)
@@ -259,7 +259,7 @@ func (device *USBDevice) getEndpointDescriptors() []usbEndpointDescriptor {
 			BEndpointAddress: 0b10000001,
 			BmAttributes:     0b00000011,
 			WMaxPacketSize:   64,
-			BInterval:        255,
+			BInterval:        5,
 		},
 		{
 			BLength:          length,
@@ -267,7 +267,7 @@ func (device *USBDevice) getEndpointDescriptors() []usbEndpointDescriptor {
 			BEndpointAddress: 0b00000010,
 			BmAttributes:     0b00000011,
 			WMaxPacketSize:   64,
-			BInterval:        255,
+			BInterval:        5,
 		},
 	}
 }

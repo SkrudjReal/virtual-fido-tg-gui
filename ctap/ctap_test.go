@@ -16,6 +16,7 @@ import (
 type dummyCTAPClient struct {
 	vault identities.IdentityVault
 }
+
 func (client *dummyCTAPClient) SupportsResidentKey() bool {
 	return true
 }
@@ -31,7 +32,7 @@ func (client *dummyCTAPClient) NewCredentialSource(
 	return client.vault.NewIdentity(relyingParty, user)
 }
 func (client *dummyCTAPClient) GetAssertionSource(
-	relyingPartyID string, 
+	relyingPartyID string,
 	allowList []webauthn.PublicKeyCredentialDescriptor) *identities.CredentialSource {
 	sources := client.vault.GetMatchingCredentialSources(relyingPartyID, allowList)
 	if len(sources) > 0 {
@@ -39,6 +40,17 @@ func (client *dummyCTAPClient) GetAssertionSource(
 	} else {
 		return nil
 	}
+}
+func (client *dummyCTAPClient) GetAssertionSources(
+	relyingPartyID string,
+	allowList []webauthn.PublicKeyCredentialDescriptor) []*identities.CredentialSource {
+	return client.vault.GetMatchingCredentialSources(relyingPartyID, allowList)
+}
+func (client *dummyCTAPClient) SelectAssertionSource(sources []*identities.CredentialSource) *identities.CredentialSource {
+	if len(sources) > 0 {
+		return sources[0]
+	}
+	return nil
 }
 func (client *dummyCTAPClient) CreateAttestationCertificiate(privateKey *cose.SupportedCOSEPrivateKey) []byte {
 	return nil
@@ -73,26 +85,26 @@ func TestMakeCredential(t *testing.T) {
 	args := makeCredentialArgs{
 		ClientDataHash: []byte{},
 		RP: &webauthn.PublicKeyCredentialRPEntity{
-			ID: "example.com",
+			ID:   "example.com",
 			Name: "Example",
 		},
 		User: &webauthn.PublicKeyCrendentialUserEntity{
-			ID: []byte{0,1,2,3,4},
+			ID:          []byte{0, 1, 2, 3, 4},
 			DisplayName: "DisplayAlice",
-			Name: "Alice",
+			Name:        "Alice",
 		},
 		PubKeyCredParams: []webauthn.PublicKeyCredentialParams{
 			{
-				Type: "public-key",
+				Type:      "public-key",
 				Algorithm: cose.COSE_ALGORITHM_ID_ES256,
 			},
 		},
 		ExcludeList: []webauthn.PublicKeyCredentialDescriptor{},
-		Extensions: map[string]interface{}{},
+		Extensions:  map[string]interface{}{},
 		Options: &makeCredentialOptions{
 			ResidentKey: true,
 		},
-		PINUVAuthParam: nil,
+		PINUVAuthParam:    nil,
 		PINUVAuthProtocol: 0,
 	}
 	argBytes, err := cbor.Marshal(&args)
@@ -103,40 +115,42 @@ func TestMakeCredential(t *testing.T) {
 	test.AssertNotNil(t, responseBytes, "Response is nil")
 	code := ctapStatusCode(responseBytes[0])
 	test.AssertEqual(t, code, ctap1ErrSuccess, "Response code is not success")
-	var response makeCredentialResponse
+	var response struct {
+		FormatIdentifer      string         `cbor:"1,keyasint"`
+		AuthData             []byte         `cbor:"2,keyasint"`
+		AttestationStatement map[string]any `cbor:"3,keyasint"`
+	}
 	err = cbor.Unmarshal(responseBytes[1:], &response)
 	util.CheckErr(err, "Invalid response")
 	test.AssertNotNil(t, response.AuthData, "AuthData is nil")
-	test.AssertNotEqual(t, response.FormatIdentifer, "", "Format is empty")
-	test.AssertNotNil(t, response.AttestationStatement.Sig, "Attestation signature is nil")
-	test.AssertNotNil(t, response.AttestationStatement.X5c, "Attestation cert is nil")
+	test.AssertEqual(t, response.FormatIdentifer, "none", "Format is not none")
 }
 
 func TestGetAssertion(t *testing.T) {
 	client := &dummyCTAPClient{}
 	ctap := NewCTAPServer(client)
 	identity := client.vault.NewIdentity(&webauthn.PublicKeyCredentialRPEntity{
-		ID: "rp",
+		ID:   "rp",
 		Name: "rp",
 	}, &webauthn.PublicKeyCrendentialUserEntity{
-		ID: []byte{0,1,2,3,4},
+		ID:          []byte{0, 1, 2, 3, 4},
 		DisplayName: "Alice",
-		Name: "Alice",
+		Name:        "Alice",
 	})
 
-	clientDataHash := crypto.HashSHA256([]byte{0,1,2,3,4})
+	clientDataHash := crypto.HashSHA256([]byte{0, 1, 2, 3, 4})
 	args := getAssertionArgs{
-		RPID: "rp",
+		RPID:           "rp",
 		ClientDataHash: clientDataHash,
 		AllowList: []webauthn.PublicKeyCredentialDescriptor{
 			{
-				Type: "public-key",
-				ID: identity.ID,
+				Type:       "public-key",
+				ID:         identity.ID,
 				Transports: []string{"USB"},
 			},
 		},
-		Options: getAssertionOptions{},
-		PINUVAuthParam: nil,
+		Options:           getAssertionOptions{},
+		PINUVAuthParam:    nil,
 		PINUVAuthProtocol: 0,
 	}
 	argBytes := util.Concat([]byte{byte(ctapCommandGetAssertion)}, util.MarshalCBOR(args))
@@ -161,7 +175,7 @@ func TestGetInfo(t *testing.T) {
 	util.CheckErr(err, "Could not decode response")
 	test.AssertContains(t, response.Versions, "U2F_V2", "U2F not supported")
 	test.AssertContains(t, response.Versions, "FIDO_2_0", "FIDO2.0 not supported")
-	test.Assert(t, !bytes.Equal(make([]byte,16), response.AAGUID[:]), "AAGUID is empty")
+	test.Assert(t, !bytes.Equal(make([]byte, 16), response.AAGUID[:]), "AAGUID is empty")
 	test.Assert(t, response.Options.CanResidentKey, "Cant use resident keys")
 	test.Assert(t, !response.Options.IsPlatform, "Is not marked a non-platform auth")
 }

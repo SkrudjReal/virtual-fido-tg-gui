@@ -7,9 +7,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	virtual_fido "github.com/bulwarkid/virtual-fido"
 	"github.com/bulwarkid/virtual-fido/fido_client"
+	"github.com/bulwarkid/virtual-fido/gui"
 	"github.com/bulwarkid/virtual-fido/identities"
 	"github.com/bulwarkid/virtual-fido/util"
 	"github.com/spf13/cobra"
@@ -39,10 +41,10 @@ func deleteIdentity(cmd *cobra.Command, args []string) {
 	client := createClient()
 	ids := client.Identities()
 	targetIDs := make([]*identities.CredentialSource, 0)
-	for _, id := range ids {
-		hexString := hex.EncodeToString(id.ID)
+	for i := range ids {
+		hexString := hex.EncodeToString(ids[i].ID)
 		if strings.HasPrefix(hexString, identityID) {
-			targetIDs = append(targetIDs, &id)
+			targetIDs = append(targetIDs, &ids[i])
 		}
 	}
 	if len(targetIDs) > 1 {
@@ -96,6 +98,18 @@ func start(cmd *cobra.Command, args []string) {
 	runServer(client)
 }
 
+func runGUI(cmd *cobra.Command, args []string) {
+	srv := gui.NewServer(vaultFilename, vaultPassphrase)
+	addr := "127.0.0.1:8080"
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		_ = srv.StartDaemon()
+	}()
+	if err := srv.StartHTTPServer(addr); err != nil {
+		fmt.Printf("HTTP server error: %v\n", err)
+	}
+}
+
 func createClient() *fido_client.DefaultFIDOClient {
 	// ALL OF THIS IS INSECURE, FOR TESTING PURPOSES ONLY
 	caPrivateKey, err := identities.CreateCAPrivateKey()
@@ -133,6 +147,13 @@ func init() {
 		Run:   start,
 	}
 	rootCmd.AddCommand(start)
+
+	guiCmd := &cobra.Command{
+		Use:   "gui",
+		Short: "Launch Virtual FIDO Material 3 GUI manager & setup wizard",
+		Run:   runGUI,
+	}
+	rootCmd.AddCommand(guiCmd)
 
 	list := &cobra.Command{
 		Use:   "list",

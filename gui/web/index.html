@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virtual FIDO2 Token — Manager & Setup</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Top App Bar -->
+  <header class="top-app-bar">
+    <div class="brand-section">
+      <div class="brand-icon">
+        <!-- Shield / Key SVG -->
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1>Virtual FIDO2 Token</h1>
+        <span>CTAP 2.0 / WebAuthn &bull; Material 3</span>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <div id="status-chip" class="m3-chip stopped">
+        <span class="pulse-dot grey" id="status-dot"></span>
+        <span id="status-text">DAEMON STOPPED</span>
+      </div>
+      <div id="usb-chip" class="m3-chip">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M15 7v4h1v2h-3V5h2l-3-4-3 4h2v8H8v-2.07c.7-.37 1.2-1.08 1.2-1.93 0-1.21-.99-2.2-2.2-2.2-1.21 0-2.2.99-2.2 2.2 0 .85.5 1.56 1.2 1.93V13c0 1.11.89 2 2 2h3v3.05c-.71.37-1.2 1.1-1.2 1.95a2.2 2.2 0 0 0 4.4 0c0-.85-.49-1.58-1.2-1.95V15h3c1.11 0 2-.89 2-2v-2h1V7h-4z"/>
+        </svg>
+        <span id="usb-port-text">USB Detached</span>
+      </div>
+      <button id="toggle-daemon-btn" class="m3-btn m3-btn-filled" onclick="toggleDaemon()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M8 5v14l11-7z"/>
+        </svg>
+        <span id="daemon-btn-label">Start Token</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- M3 Navigation Tabs -->
+  <nav class="m3-tab-bar">
+    <button class="m3-tab active" onclick="switchTab('dashboard')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/>
+      </svg>
+      Dashboard
+    </button>
+    <button class="m3-tab" onclick="switchTab('passkeys')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M7 14c-1.66 0-3 1.34-3 3 0 1.31.84 2.41 2 2.83V21h2v-1.17c1.16-.41 2-1.52 2-2.83 0-1.66-1.34-3-3-3zm13.71-9.71a1 1 0 0 0-1.42 0L17.5 6.09l-1.41-1.41-1.42 1.41 1.41 1.42-2.12 2.12c-.68-.39-1.47-.63-2.38-.63-2.76 0-5 2.24-5 5 0 .34.04.67.11.99L2.29 19.29A1 1 0 0 0 3 21h4v-2h2v-2h2l1.63-1.63c.43.14.88.23 1.37.23 2.76 0 5-2.24 5-5 0-.91-.24-1.7-.63-2.38l3.34-3.34c.39-.39.39-1.02 0-1.41z"/>
+      </svg>
+      Passkeys Vault
+    </button>
+    <button class="m3-tab" onclick="switchTab('installer')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+      </svg>
+      Setup & Drivers
+    </button>
+    <button class="m3-tab" onclick="switchTab('logs')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-9 13H5v-2h6v2zm7-4H5v-2h13v2zm0-4H5V7h13v2z"/>
+      </svg>
+      Event Logs
+    </button>
+    <button class="m3-tab" onclick="switchTab('security')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+      </svg>
+      PIN & Security
+    </button>
+  </nav>
+
+  <!-- Main Content Container -->
+  <main class="main-content">
+
+    <!-- TAB 1: DASHBOARD -->
+    <section id="pane-dashboard" class="tab-pane active">
+      <!-- Stats Row -->
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-label">Stored Passkeys</div>
+          <div class="stat-value" id="stat-passkeys-count">1</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">USB Port State</div>
+          <div class="stat-value" id="stat-usb-port" style="font-size: 18px; line-height: 1.6;">Port 0 (Attached)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Server Socket</div>
+          <div class="stat-value" style="font-size: 18px; line-height: 1.6; color: var(--md-sys-color-secondary);">127.0.0.1:3240</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Attestation</div>
+          <div class="stat-value" style="font-size: 18px; line-height: 1.6; color: var(--md-sys-color-success);">Self (none)</div>
+        </div>
+      </div>
+
+      <!-- Dashboard Grid -->
+      <div class="dashboard-grid">
+        <!-- Token Hardware Profile Card -->
+        <div class="m3-card m3-card-elevated">
+          <div class="card-header">
+            <div class="card-title-group">
+              <div class="card-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 2.18l7 3.12v4.7c0 4.67-3.13 9.03-7 10.15-3.87-1.12-7-5.48-7-10.15V6.3l7-3.12z"/>
+                </svg>
+              </div>
+              <div>
+                <h2 class="card-title">Token Profile</h2>
+                <div class="card-subtitle">FIDO2 Authenticator Specifications</div>
+              </div>
+            </div>
+            <span class="m3-chip active" id="profile-status-badge">Online</span>
+          </div>
+
+          <div class="spec-list">
+            <div class="spec-item">
+              <span class="spec-label">AAGUID</span>
+              <span class="spec-value">756c5af5-eca6-01a3-2fc6-d30ce2f201c5</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-label">Supported Versions</span>
+              <span class="spec-value">FIDO_2_0 &bull; U2F_V2</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-label">Key Algorithms</span>
+              <span class="spec-value">ES256 (COSE -7) ECDSA P-256</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-label">Resident Keys (rk)</span>
+              <span class="spec-value" style="color: var(--md-sys-color-success);">Supported (Unlimited)</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-label">User Presence (up)</span>
+              <span class="spec-value" style="color: var(--md-sys-color-success);">Interactive GUI Modal</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-label">Vault Storage</span>
+              <span class="spec-value" id="vault-path-text">vault.json (Encrypted)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Token Quick Control Card -->
+        <div class="m3-card m3-card-elevated">
+          <div class="card-header">
+            <div class="card-title-group">
+              <div class="card-icon tertiary">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
+                </svg>
+              </div>
+              <div>
+                <h2 class="card-title">Quick Controls</h2>
+                <div class="card-subtitle">Manage daemon & USB attachment</div>
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 14px;">
+            <p style="font-size: 13px; color: var(--md-sys-color-on-surface-variant); line-height: 1.5;">
+              The virtual FIDO2 daemon listens on TCP port 3240 and is attached to the Windows kernel USB stack via the <code>vhci_ude</code> driver.
+            </p>
+
+            <div style="display: flex; gap: 10px; margin-top: 10px;">
+              <button class="m3-btn m3-btn-tonal" onclick="attachUSB()" id="btn-attach">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                </svg>
+                Attach USB
+              </button>
+              <button class="m3-btn m3-btn-outlined" onclick="detachUSB()" id="btn-detach">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M19 13H5v-2h14v2z"/>
+                </svg>
+                Detach USB
+              </button>
+              <button class="m3-btn m3-btn-outlined" onclick="switchTab('installer')">
+                Driver Setup
+              </button>
+            </div>
+
+            <div style="margin-top: 20px; padding: 14px; background: var(--md-sys-color-surface-container); border-radius: var(--md-shape-md); border: 1px solid rgba(255,255,255,0.04);">
+              <div style="font-size: 13px; font-weight: 600; color: var(--md-sys-color-primary); margin-bottom: 6px;">Live Status Note</div>
+              <div style="font-size: 12px; color: var(--md-sys-color-on-surface-variant); line-height: 1.4;">
+                Whenever a website or desktop app (like Telegram Desktop) requests WebAuthn, a prompt will immediately open right here for you to approve or choose your account.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: PASSKEYS VAULT -->
+    <section id="pane-passkeys" class="tab-pane">
+      <div class="vault-toolbar">
+        <div class="search-field">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="var(--md-sys-color-outline)">
+            <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+          </svg>
+          <input type="text" id="passkey-search-input" placeholder="Search by website or username..." oninput="filterPasskeys()">
+        </div>
+        <div style="display: flex; gap: 10px; align-items: center;">
+          <span class="m3-chip" id="vault-count-badge">1 Credential</span>
+          <button class="m3-btn m3-btn-tonal" onclick="loadIdentities()">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+            </svg>
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      <!-- Passkeys Grid -->
+      <div class="passkey-grid" id="passkey-list">
+        <!-- Rendered dynamically by app.js -->
+      </div>
+    </section>
+
+    <!-- TAB 3: SETUP & DRIVERS (INSTALLER WIZARD) -->
+    <section id="pane-installer" class="tab-pane">
+      <!-- Wizard Banner -->
+      <div class="wizard-header-banner">
+        <div>
+          <h2 style="font-size: 20px; font-weight: 700; color: #fff;">Windows Driver & Setup Wizard</h2>
+          <p style="font-size: 13px; color: #94a3b8; margin-top: 4px;">
+            Configure Windows 11 kernel environment, install USB/IP test certificates, and deploy the virtual VHCI USB controller.
+          </p>
+        </div>
+        <div style="display: flex; gap: 10px; align-items: center;">
+          <span class="m3-chip active" id="wizard-overall-chip">
+            <span class="pulse-dot"></span>
+            <span id="wizard-overall-text">SYSTEM READY</span>
+          </span>
+          <button class="m3-btn m3-btn-filled" onclick="checkInstallerStatus()">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+            </svg>
+            Run Health Check
+          </button>
+        </div>
+      </div>
+
+      <!-- 4 Steps Checklist -->
+      <div class="wizard-steps">
+        <!-- Step 1: Windows Testsigning Mode -->
+        <div class="wizard-step-card" id="step-card-testsigning">
+          <div class="step-info-col">
+            <div class="step-num-badge">1</div>
+            <div>
+              <div class="step-title">Windows Testsigning Mode</div>
+              <div class="step-desc">
+                Allows Windows to load test-signed kernel-mode drivers like the USB/IP virtual host controller.
+              </div>
+              <div class="step-command">bcdedit.exe /set testsigning on</div>
+            </div>
+          </div>
+          <div class="step-actions">
+            <span class="m3-chip" id="badge-testsigning">Checking...</span>
+            <button class="m3-btn m3-btn-tonal" onclick="enableTestsigning()" id="btn-enable-testsigning">
+              Enable Testsigning
+            </button>
+          </div>
+        </div>
+
+        <!-- Step 2: USB/IP Root Certificate -->
+        <div class="wizard-step-card" id="step-card-cert">
+          <div class="step-info-col">
+            <div class="step-num-badge">2</div>
+            <div>
+              <div class="step-title">USB/IP Test Certificate</div>
+              <div class="step-desc">
+                Imports <code>usbip_test.pfx</code> into the Windows Trusted Root Certification Authorities store.
+              </div>
+              <div class="step-command">certutil.exe -addstore -f "Root" usbip_test.pfx</div>
+            </div>
+          </div>
+          <div class="step-actions">
+            <span class="m3-chip" id="badge-cert">Checking...</span>
+            <button class="m3-btn m3-btn-tonal" onclick="installCert()" id="btn-install-cert">
+              Install Certificate
+            </button>
+          </div>
+        </div>
+
+        <!-- Step 3: VHCI UDE Driver -->
+        <div class="wizard-step-card" id="step-card-driver">
+          <div class="step-info-col">
+            <div class="step-num-badge">3</div>
+            <div>
+              <div class="step-title">Virtual Host Controller (VHCI UDE Driver)</div>
+              <div class="step-desc">
+                Installs the kernel-mode driver that exposes the virtual USB controller to Windows Device Manager.
+              </div>
+              <div class="step-command">usbip.exe install -u</div>
+            </div>
+          </div>
+          <div class="step-actions">
+            <span class="m3-chip" id="badge-driver">Checking...</span>
+            <div style="display: flex; gap: 8px;">
+              <button class="m3-btn m3-btn-tonal" onclick="installDriver()" id="btn-install-driver">
+                Install Driver
+              </button>
+              <button class="m3-btn m3-btn-outlined" onclick="uninstallDriver()" id="btn-uninstall-driver" style="color: var(--md-sys-color-error); border-color: rgba(242,184,181,0.3);">
+                Uninstall
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 4: Loopback Verification -->
+        <div class="wizard-step-card" id="step-card-port">
+          <div class="step-info-col">
+            <div class="step-num-badge">4</div>
+            <div>
+              <div class="step-title">Loopback & Port Verification</div>
+              <div class="step-desc">
+                Checks that the driver communicates with the virtual USB/IP server and enumerates active virtual ports.
+              </div>
+              <div class="step-command">usbip.exe port</div>
+            </div>
+          </div>
+          <div class="step-actions">
+            <span class="m3-chip" id="badge-port">Checking...</span>
+            <button class="m3-btn m3-btn-tonal" onclick="testLoopback()" id="btn-test-loopback">
+              Verify Port
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Installer Output Console -->
+      <div class="terminal-card">
+        <div class="terminal-header">
+          <div class="terminal-dots">
+            <span class="terminal-dot red"></span>
+            <span class="terminal-dot yellow"></span>
+            <span class="terminal-dot green"></span>
+          </div>
+          <span class="terminal-title">DRIVER INSTALLATION LOG & DIAGNOSTICS</span>
+          <button class="m3-btn-text" onclick="clearTerminal()" style="font-size: 11px; height: auto; padding: 2px 6px;">Clear</button>
+        </div>
+        <div class="terminal-body" id="installer-terminal">
+          <div class="terminal-line out">[SETUP] Installer module ready. Click "Run Health Check" to inspect driver state.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: EVENT LOGS -->
+    <section id="pane-logs" class="tab-pane">
+      <div class="logs-toolbar">
+        <div class="logs-filters">
+          <button class="m3-chip active" onclick="setLogFilter('all')" id="filter-all">All Packets</button>
+          <button class="m3-chip" onclick="setLogFilter('CTAP')" id="filter-ctap">CTAP / WebAuthn</button>
+          <button class="m3-chip" onclick="setLogFilter('USBIP')" id="filter-usbip">USB/IP</button>
+          <button class="m3-chip" onclick="setLogFilter('CLIENT')" id="filter-client">Client Approvals</button>
+        </div>
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+            <input type="checkbox" id="autoscroll-chk" checked style="accent-color: var(--md-sys-color-primary);"> Autoscroll
+          </label>
+          <button class="m3-btn m3-btn-tonal" onclick="clearLogs()" style="height: 32px; padding: 0 14px; font-size: 12px;">
+            Clear Logs
+          </button>
+        </div>
+      </div>
+
+      <div class="logs-container" id="logs-container">
+        <!-- Rendered in real-time -->
+      </div>
+    </section>
+
+    <!-- TAB 5: PIN & SECURITY -->
+    <section id="pane-security" class="tab-pane">
+      <div style="max-width: 600px; margin: 0 auto;">
+        <div class="m3-card m3-card-elevated">
+          <div class="card-header">
+            <div class="card-title-group">
+              <div class="card-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+                </svg>
+              </div>
+              <div>
+                <h2 class="card-title">Token PIN Protection</h2>
+                <div class="card-subtitle">Require PIN verification for credentials</div>
+              </div>
+            </div>
+            <label class="m3-switch">
+              <input type="checkbox" id="pin-toggle-chk" onchange="togglePINProtection()">
+              <span class="switch-track">
+                <span class="switch-thumb"></span>
+              </span>
+            </label>
+          </div>
+
+          <div style="padding-top: 10px;">
+            <p style="font-size: 13px; color: var(--md-sys-color-on-surface-variant); margin-bottom: 20px; line-height: 1.5;">
+              When PIN is enabled, Windows Hello will prompt for your Token PIN before generating credentials or signing assertions.
+            </p>
+
+            <div class="m3-text-field">
+              <label for="new-pin-input">Set / Update PIN (4 to 8 digits)</label>
+              <input type="password" id="new-pin-input" placeholder="Enter numeric PIN" maxlength="8">
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+              <button class="m3-btn m3-btn-filled" onclick="saveNewPIN()">Save PIN</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ==================== MODALS & DIALOGS ==================== -->
+
+  <!-- WebAuthn Live Approval Modal (M3 Dialog) -->
+  <dialog id="approval-modal" class="m3-dialog">
+    <div class="dialog-header">
+      <div class="dialog-icon-badge" id="modal-icon-badge">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 2.18l7 3.12v4.7c0 4.67-3.13 9.03-7 10.15-3.87-1.12-7-5.48-7-10.15V6.3l7-3.12z"/>
+        </svg>
+      </div>
+      <div>
+        <div class="dialog-headline" id="modal-headline">Passkey Request</div>
+        <div class="dialog-supporting-text" id="modal-supporting-text">A service is requesting access to your virtual FIDO token.</div>
+      </div>
+    </div>
+
+    <!-- Request Details Box -->
+    <div class="dialog-content-box">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <span style="font-size: 12px; color: var(--md-sys-color-on-surface-variant);">Website / Service:</span>
+        <span style="font-size: 14px; font-weight: 600; color: var(--md-sys-color-primary);" id="modal-rp-name">telegram.org</span>
+      </div>
+      <div id="modal-user-row" style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 12px; color: var(--md-sys-color-on-surface-variant);">Account:</span>
+        <span style="font-size: 13px; font-weight: 500; color: var(--md-sys-color-on-surface);" id="modal-user-name">account_username</span>
+      </div>
+
+      <!-- Multiple Accounts Chooser (If applicable) -->
+      <div id="modal-multi-accounts-container" style="display: none; margin-top: 14px;">
+        <div style="font-size: 12px; font-weight: 600; color: var(--md-sys-color-primary); margin-bottom: 6px;">Select account to sign in with:</div>
+        <div class="account-selector-list" id="modal-accounts-list">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+    </div>
+
+    <div class="dialog-actions">
+      <button class="m3-btn m3-btn-outlined" onclick="respondApproval(false)" id="modal-btn-deny">Deny</button>
+      <button class="m3-btn m3-btn-filled" onclick="respondApproval(true)" id="modal-btn-approve">Approve</button>
+    </div>
+  </dialog>
+
+  <!-- Delete Passkey Confirmation Dialog -->
+  <dialog id="delete-modal" class="m3-dialog">
+    <div class="dialog-header">
+      <div class="dialog-icon-badge danger">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+        </svg>
+      </div>
+      <div>
+        <div class="dialog-headline">Delete Passkey?</div>
+        <div class="dialog-supporting-text">
+          Are you sure you want to permanently remove this passkey credential from your vault?
+        </div>
+      </div>
+    </div>
+
+    <div class="dialog-content-box">
+      <div style="font-size: 14px; font-weight: 600; color: var(--md-sys-color-on-surface);" id="delete-rp-name">Service Name</div>
+      <div style="font-size: 12px; color: var(--md-sys-color-on-surface-variant); font-family: var(--font-mono); margin-top: 4px;" id="delete-user-name">account_username</div>
+    </div>
+
+    <div class="dialog-actions">
+      <button class="m3-btn m3-btn-text" onclick="closeDeleteModal()">Cancel</button>
+      <button class="m3-btn m3-btn-danger" onclick="confirmDeletePasskey()">Delete Passkey</button>
+    </div>
+  </dialog>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="m3-toast" style="display: none;">
+    <span id="toast-text">Message</span>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

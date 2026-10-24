@@ -91,7 +91,7 @@ func TestGetStringDescriptor(t *testing.T) {
 		setup.setRequestClass(usbRequestClassStandard)
 		setup.setRecipient(usbRequestRecipientDevice)
 		setup.BRequest = usbRequestGetDescriptor
-		setup.WValue = (uint16(usbDescriptorString) << 8 | uint16(i))
+		setup.WValue = (uint16(usbDescriptorString)<<8 | uint16(i))
 		setup.WLength = 64
 		setupBytes := util.ToLE(setup)
 		device.HandleMessage(0, setResponse, 0, setupBytes, []byte{})
@@ -133,9 +133,9 @@ func TestDeviceSummary(t *testing.T) {
 	device := NewUSBDevice(&delegate)
 	// Check a few fields in the summary to make sure they are correct
 	summary := device.DeviceSummary()
-	if summary.Header.Busnum != 2 || 
-		summary.Header.Devnum != 2 || 
-		util.CStringToString(summary.Header.BusID[:]) != "2-2" || 
+	if summary.Header.Busnum != 2 ||
+		summary.Header.Devnum != 2 ||
+		util.CStringToString(summary.Header.BusID[:]) != "2-2" ||
 		util.CStringToString(summary.Header.Path[:]) != "/device/0" {
 		t.Fatalf("Device summary incorrect")
 	}

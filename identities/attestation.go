@@ -12,6 +12,15 @@ import (
 	"github.com/bulwarkid/virtual-fido/cose"
 )
 
+func randomSerialNumber() *big.Int {
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil || serialNumber.Sign() <= 0 {
+		return big.NewInt(1)
+	}
+	return serialNumber
+}
+
 // We need two functions here because Go's type system isn't enough to support this
 func extractPublicKey(key *cose.SupportedCOSEPublicKey) any {
 	if key.ECDSA != nil {
@@ -23,8 +32,8 @@ func extractPublicKey(key *cose.SupportedCOSEPublicKey) any {
 	} else {
 		panic("No supported private key data!")
 	}
-
 }
+
 func extractPrivateKey(key *cose.SupportedCOSEPrivateKey) any {
 	if key.ECDSA != nil {
 		return key.ECDSA
@@ -35,26 +44,23 @@ func extractPrivateKey(key *cose.SupportedCOSEPrivateKey) any {
 	} else {
 		panic("No supported private key data!")
 	}
-
 }
 
 func CreateSelfSignedAttestationCertificate(
 	certificateAuthority *x509.Certificate,
 	certificateAuthorityPrivateKey *cose.SupportedCOSEPrivateKey,
 	targetPrivateKey *cose.SupportedCOSEPrivateKey) (*x509.Certificate, error) {
-	// TODO: Fill in fields like SerialNumber and SubjectKeyIdentifier
 	templateCert := &x509.Certificate{
 		Version:      2,
-		SerialNumber: big.NewInt(0),
+		SerialNumber: randomSerialNumber(),
 		Subject: pkix.Name{
 			Organization:       []string{"Self-Signed Virtual FIDO"},
 			Country:            []string{"US"},
 			CommonName:         "Self-Signed Virtual FIDO",
 			OrganizationalUnit: []string{"Authenticator Attestation"},
 		},
-		NotBefore:             time.Now(),
+		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().AddDate(10, 0, 0),
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		IsCA:                  false,
 		BasicConstraintsValid: true,
@@ -82,15 +88,14 @@ func CreateCAPrivateKey() (*cose.SupportedCOSEPrivateKey, error) {
 
 func CreateSelfSignedCA(privateKey *cose.SupportedCOSEPrivateKey) (*x509.Certificate, error) {
 	authority := &x509.Certificate{
-		SerialNumber: big.NewInt(0),
+		SerialNumber: randomSerialNumber(),
 		Subject: pkix.Name{
 			Organization: []string{"Self-Signed Virtual FIDO"},
 			Country:      []string{"US"},
 		},
-		NotBefore:             time.Now(),
+		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().AddDate(10, 0, 0),
 		IsCA:                  true,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 		BasicConstraintsValid: true,
 	}

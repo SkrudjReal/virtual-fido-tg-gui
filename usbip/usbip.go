@@ -17,7 +17,7 @@ const (
 
 var usbipDirectionDescriptions = map[usbipDirection]string{
 	usbipDirOut: "usbipDirOut",
-	usbipDirIn: "usbipDirIn",
+	usbipDirIn:  "usbipDirIn",
 }
 
 type usbipControlCommand uint16
@@ -53,9 +53,9 @@ var usbipCommandDescriptions = map[usbipCommand]string{
 }
 
 type usbipControlHeader struct {
-	Version     uint16
+	Version uint16
 	Command usbipControlCommand
-	Status      uint32
+	Status  uint32
 }
 
 func (header *usbipControlHeader) String() string {
@@ -79,9 +79,9 @@ func newOpRepDevlist(devices []USBIPDevice) usbipOpRepDevlist {
 	}
 	return usbipOpRepDevlist{
 		Header: usbipControlHeader{
-			Version:     usbipVersion,
+			Version: usbipVersion,
 			Command: usbipCommandOpRepDevlist,
-			Status:      0,
+			Status:  0,
 		},
 		NumDevices: uint32(len(devices)),
 		Devices:    summaries,
@@ -100,9 +100,9 @@ func (reply usbipOpRepImport) String() string {
 func newOpRepImport(device USBIPDevice) usbipOpRepImport {
 	return usbipOpRepImport{
 		Header: usbipControlHeader{
-			Version:     usbipVersion,
+			Version: usbipVersion,
 			Command: usbipCommandOpRepImport,
-			Status:      0,
+			Status:  0,
 		},
 		Device: device.DeviceSummary().Header,
 	}
@@ -110,9 +110,9 @@ func newOpRepImport(device USBIPDevice) usbipOpRepImport {
 
 func opRepImportError(statusCode uint32) usbipControlHeader {
 	return usbipControlHeader{
-		Version:     usbipVersion,
+		Version: usbipVersion,
 		Command: usbipCommandOpRepImport,
-		Status:      statusCode,
+		Status:  statusCode,
 	}
 }
 

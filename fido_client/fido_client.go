@@ -1,9 +1,14 @@
 package fido_client
 
 import (
+	"bufio"
 	"crypto/ecdsa"
 	"crypto/x509"
+	"encoding/hex"
+	"fmt"
 	"log"
+	"os"
+	"strings"
 
 	"github.com/bulwarkid/virtual-fido/cose"
 	"github.com/bulwarkid/virtual-fido/crypto"
@@ -15,8 +20,9 @@ import (
 type ClientAction uint8
 
 type ClientActionRequestParams struct {
-	RelyingParty string
-	UserName     string
+	RelyingParty    string
+	UserName        string
+	UserDisplayName string
 }
 
 const (
@@ -30,6 +36,10 @@ var clientLogger *log.Logger = util.NewLogger("[CLIENT] ", util.LogLevelDebug)
 
 type ClientRequestApprover interface {
 	ApproveClientAction(action ClientAction, params ClientActionRequestParams) bool
+}
+
+type ClientAccountSelector interface {
+	SelectAssertionSource(sources []*identities.CredentialSource) *identities.CredentialSource
 }
 
 type ClientDataSaver interface {
@@ -52,6 +62,7 @@ type DefaultFIDOClient struct {
 
 	vault           *identities.IdentityVault
 	requestApprover ClientRequestApprover
+	accountSelector ClientAccountSelector
 	dataSaver       ClientDataSaver
 }
 
@@ -111,11 +122,59 @@ func (client *DefaultFIDOClient) GetAssertionSource(relyingPartyID string, allow
 		return nil
 	}
 
-	// TODO: Allow user to choose credential source
-	credentialSource := sources[0]
+	credentialSource := sources[len(sources)-1]
 	credentialSource.SignatureCounter++
 	client.saveData()
 	return credentialSource
+}
+
+func (client *DefaultFIDOClient) GetAssertionSources(relyingPartyID string, allowList []webauthn.PublicKeyCredentialDescriptor) []*identities.CredentialSource {
+	return client.vault.GetMatchingCredentialSources(relyingPartyID, allowList)
+}
+
+func (client *DefaultFIDOClient) SetAccountSelector(selector ClientAccountSelector) {
+	client.accountSelector = selector
+}
+
+func (client *DefaultFIDOClient) SelectAssertionSource(sources []*identities.CredentialSource) *identities.CredentialSource {
+	if len(sources) == 0 {
+		return nil
+	}
+	if len(sources) == 1 {
+		return sources[0]
+	}
+	if client.accountSelector != nil {
+		selected := client.accountSelector.SelectAssertionSource(sources)
+		if selected != nil {
+			return selected
+		}
+	}
+	fmt.Printf("\nMultiple accounts found for \"%s\":\n", sources[0].RelyingParty.Name)
+	for i, s := range sources {
+		displayName := s.User.DisplayName
+		if displayName == "" {
+			displayName = s.User.Name
+		}
+		fmt.Printf("  [%d] %s (%s) [ID: %s]\n", i+1, displayName, s.User.Name, hex.EncodeToString(s.ID[:4]))
+	}
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Printf("Select account (1-%d) [1]: ", len(sources))
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return sources[0]
+		}
+		input = strings.TrimSpace(input)
+		if input == "" {
+			return sources[0]
+		}
+		var choice int
+		_, err = fmt.Sscanf(input, "%d", &choice)
+		if err == nil && choice >= 1 && choice <= len(sources) {
+			return sources[choice-1]
+		}
+		fmt.Printf("Invalid selection: %s\n", input)
+	}
 }
 
 func (client DefaultFIDOClient) ApproveAccountCreation(relyingParty string) bool {
@@ -126,9 +185,14 @@ func (client DefaultFIDOClient) ApproveAccountCreation(relyingParty string) bool
 }
 
 func (client DefaultFIDOClient) ApproveAccountLogin(credentialSource *identities.CredentialSource) bool {
+	displayName := credentialSource.User.DisplayName
+	if displayName == "" {
+		displayName = credentialSource.User.Name
+	}
 	params := ClientActionRequestParams{
-		RelyingParty: credentialSource.RelyingParty.Name,
-		UserName:     credentialSource.User.Name,
+		RelyingParty:    credentialSource.RelyingParty.Name,
+		UserName:        credentialSource.User.Name,
+		UserDisplayName: displayName,
 	}
 	return client.requestApprover.ApproveClientAction(ClientActionFIDOGetAssertion, params)
 }

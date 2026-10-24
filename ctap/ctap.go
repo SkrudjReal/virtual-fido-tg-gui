@@ -64,6 +64,7 @@ const (
 	ctap2ErrPINRequired          ctapStatusCode = 0x36
 	ctap2ErrPINPolicyViolation   ctapStatusCode = 0x37
 	ctap2ErrPINExpired           ctapStatusCode = 0x38
+	ctap2ErrNotAllowed           ctapStatusCode = 0x30
 )
 
 type CTAPClient interface {
@@ -76,6 +77,8 @@ type CTAPClient interface {
 		relyingParty *webauthn.PublicKeyCredentialRPEntity,
 		user *webauthn.PublicKeyCrendentialUserEntity) *identities.CredentialSource
 	GetAssertionSource(relyingPartyID string, allowList []webauthn.PublicKeyCredentialDescriptor) *identities.CredentialSource
+	GetAssertionSources(relyingPartyID string, allowList []webauthn.PublicKeyCredentialDescriptor) []*identities.CredentialSource
+	SelectAssertionSource(sources []*identities.CredentialSource) *identities.CredentialSource
 	CreateAttestationCertificiate(privateKey *cose.SupportedCOSEPrivateKey) []byte
 
 	PINHash() []byte
@@ -90,7 +93,10 @@ type CTAPClient interface {
 }
 
 type CTAPServer struct {
-	client CTAPClient
+	client                CTAPClient
+	pendingAssertions     []*identities.CredentialSource
+	pendingClientDataHash []byte
+	pendingRPID           string
 }
 
 func NewCTAPServer(client CTAPClient) *CTAPServer {
@@ -107,6 +113,8 @@ func (server *CTAPServer) HandleMessage(data []byte) []byte {
 		return server.handleGetInfo()
 	case ctapCommandGetAssertion:
 		return server.handleGetAssertion(data[1:])
+	case ctapCommandGetNextAssertion:
+		return server.handleGetNextAssertion()
 	case ctapCommandClientPIN:
 		return server.handleClientPIN(data[1:])
 	default:
@@ -195,9 +203,9 @@ func (args makeCredentialArgs) String() string {
 }
 
 type makeCredentialResponse struct {
-	FormatIdentifer      string                    `cbor:"1,keyasint"`
-	AuthData             []byte                    `cbor:"2,keyasint"`
-	AttestationStatement basicAttestationStatement `cbor:"3,keyasint"`
+	FormatIdentifer      string      `cbor:"1,keyasint"`
+	AuthData             []byte      `cbor:"2,keyasint"`
+	AttestationStatement interface{} `cbor:"3,keyasint"`
 }
 
 func (server *CTAPServer) handleMakeCredential(data []byte) []byte {
@@ -246,18 +254,10 @@ func (server *CTAPServer) handleMakeCredential(data []byte) []byte {
 	attestedCredentialData := makeAttestedCredentialData(credentialSource)
 	authenticatorData := makeAuthData(args.RP.ID, credentialSource, attestedCredentialData, flags)
 
-	attestationCert := server.client.CreateAttestationCertificiate(credentialSource.PrivateKey)
-	attestationSignature := credentialSource.PrivateKey.Sign(append(authenticatorData, args.ClientDataHash...))
-	attestationStatement := basicAttestationStatement{
-		Alg: cose.COSE_ALGORITHM_ID_ES256,
-		Sig: attestationSignature,
-		X5c: [][]byte{attestationCert},
-	}
-
 	response := makeCredentialResponse{
 		AuthData:             authenticatorData,
-		FormatIdentifer:      "packed",
-		AttestationStatement: attestationStatement,
+		FormatIdentifer:      "none",
+		AttestationStatement: map[string]any{},
 	}
 	ctapLogger.Printf("MAKE CREDENTIAL RESPONSE: %#v\n\n", response)
 	return append([]byte{byte(ctap1ErrSuccess)}, util.MarshalCBOR(response)...)
@@ -315,11 +315,11 @@ type getAssertionArgs struct {
 }
 
 type getAssertionResponse struct {
-	Credential        *webauthn.PublicKeyCredentialDescriptor `cbor:"1,keyasint,omitempty"`
-	AuthenticatorData []byte                                  `cbor:"2,keyasint"`
-	Signature         []byte                                  `cbor:"3,keyasint"`
-	//User                *PublicKeyCrendentialUserEntity `cbor:"4,keyasint,omitempty"`
-	//NumberOfCredentials int32 `cbor:"5,keyasint"`
+	Credential          *webauthn.PublicKeyCredentialDescriptor  `cbor:"1,keyasint,omitempty"`
+	AuthenticatorData   []byte                                   `cbor:"2,keyasint"`
+	Signature           []byte                                   `cbor:"3,keyasint"`
+	User                *webauthn.PublicKeyCrendentialUserEntity `cbor:"4,keyasint,omitempty"`
+	NumberOfCredentials int32                                    `cbor:"5,keyasint,omitempty"`
 }
 
 func (server *CTAPServer) handleGetAssertion(data []byte) []byte {
@@ -345,35 +345,93 @@ func (server *CTAPServer) handleGetAssertion(data []byte) []byte {
 		}
 	}
 
-	credentialSource := server.client.GetAssertionSource(args.RPID, args.AllowList)
-	unsafeCtapLogger.Printf("CREDENTIAL SOURCE: %#v\n\n", credentialSource)
-	if credentialSource == nil {
+	sources := server.client.GetAssertionSources(args.RPID, args.AllowList)
+	unsafeCtapLogger.Printf("CREDENTIAL SOURCES: %#v\n\n", sources)
+	if len(sources) == 0 {
 		ctapLogger.Printf("ERROR: No Credentials\n\n")
 		return []byte{byte(ctap2ErrNoCredentials)}
 	}
 
-	if args.Options.UserPresence == nil || *args.Options.UserPresence {
-		if !server.client.ApproveAccountLogin(credentialSource) {
-			ctapLogger.Printf("ERROR: Unapproved action (Account login)")
+	isSilent := args.Options.UserPresence != nil && !*args.Options.UserPresence
+
+	if isSilent {
+		// Silent probe mode (Windows Hello enumeration)
+		server.pendingAssertions = sources[1:]
+		server.pendingClientDataHash = args.ClientDataHash
+		server.pendingRPID = args.RPID
+
+		credentialSource := sources[0]
+		authData := makeAuthData(args.RPID, credentialSource, nil, 0)
+		signature := credentialSource.PrivateKey.Sign(util.Concat(authData, args.ClientDataHash))
+		credentialDescriptor := credentialSource.CTAPDescriptor()
+
+		response := getAssertionResponse{
+			Credential:          &credentialDescriptor,
+			AuthenticatorData:   authData,
+			Signature:           signature,
+			User:                credentialSource.User,
+			NumberOfCredentials: int32(len(sources)),
+		}
+		ctapLogger.Printf("GET ASSERTION (SILENT) RESPONSE: %#v\n\n", response)
+		return append([]byte{byte(ctap1ErrSuccess)}, util.MarshalCBOR(response)...)
+	}
+
+	// Interactive mode (User Presence required)
+	server.pendingAssertions = nil
+	var credentialSource *identities.CredentialSource
+	if len(sources) == 1 {
+		credentialSource = sources[0]
+	} else {
+		credentialSource = server.client.SelectAssertionSource(sources)
+		if credentialSource == nil {
 			return []byte{byte(ctap2ErrOperationDenied)}
 		}
-		flags = flags | authDataFlagUserPresent
 	}
+
+	if !server.client.ApproveAccountLogin(credentialSource) {
+		ctapLogger.Printf("ERROR: Unapproved action (Account login)")
+		return []byte{byte(ctap2ErrOperationDenied)}
+	}
+	flags = flags | authDataFlagUserPresent
 
 	authData := makeAuthData(args.RPID, credentialSource, nil, flags)
 	signature := credentialSource.PrivateKey.Sign(util.Concat(authData, args.ClientDataHash))
+	credentialSource.SignatureCounter++
 
 	credentialDescriptor := credentialSource.CTAPDescriptor()
 	response := getAssertionResponse{
-		Credential:        &credentialDescriptor,
-		AuthenticatorData: authData,
-		Signature:         signature,
-		//User:                credentialSource.User,
-		//NumberOfCredentials: 1,
+		Credential:          &credentialDescriptor,
+		AuthenticatorData:   authData,
+		Signature:           signature,
+		User:                credentialSource.User,
+		NumberOfCredentials: 1,
 	}
 
 	ctapLogger.Printf("GET ASSERTION RESPONSE: %#v\n\n", response)
 
+	return append([]byte{byte(ctap1ErrSuccess)}, util.MarshalCBOR(response)...)
+}
+
+func (server *CTAPServer) handleGetNextAssertion() []byte {
+	if len(server.pendingAssertions) == 0 {
+		ctapLogger.Printf("ERROR: No more pending assertions\n\n")
+		return []byte{byte(ctap2ErrNotAllowed)}
+	}
+	credentialSource := server.pendingAssertions[0]
+	server.pendingAssertions = server.pendingAssertions[1:]
+
+	authData := makeAuthData(server.pendingRPID, credentialSource, nil, 0)
+	signature := credentialSource.PrivateKey.Sign(util.Concat(authData, server.pendingClientDataHash))
+	credentialDescriptor := credentialSource.CTAPDescriptor()
+
+	response := getAssertionResponse{
+		Credential:          &credentialDescriptor,
+		AuthenticatorData:   authData,
+		Signature:           signature,
+		User:                credentialSource.User,
+		NumberOfCredentials: int32(len(server.pendingAssertions) + 1),
+	}
+	ctapLogger.Printf("GET NEXT ASSERTION RESPONSE: %#v\n\n", response)
 	return append([]byte{byte(ctap1ErrSuccess)}, util.MarshalCBOR(response)...)
 }
 

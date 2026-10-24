@@ -1,5 +1,22 @@
 /target
 vault.data
-.DS_store
-/demo
 vault.json
+.DS_Store
+# Exclude root-level built binaries but allow bundled driver executables in subdirs
+/*.exe
+/*.exe~
+# Exclude common build artifacts
+*.pdb
+*.log
+*.tmp
+.DS_Store
+/release
+
+# Allow bundled Windows driver/usbip binaries that must stay in the repo
+!cmd/demo/usbip/bin/*.exe
+!gui/driver_bin/*.exe
+!gui/driver_bin/*.dll
+!gui/driver_bin/*.sys
+!gui/driver_bin/*.inf
+!gui/driver_bin/*.cat
+!gui/driver_bin/*.pfx

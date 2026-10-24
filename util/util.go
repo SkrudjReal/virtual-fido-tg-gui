@@ -128,18 +128,14 @@ func Concat[T any](arrays ...[]T) []T {
 	return output
 }
 
-func StartRecurringFunction(f func(), interval int64) chan interface{} {
-	stopSignal := make(chan interface{}, 1)
-	trigger := make(chan interface{}, 1)
-	wait := func() {
-		time.Sleep(time.Millisecond * time.Duration(interval))
-		trigger <- nil
-	}
+func StartRecurringFunction(f func(), interval int64) chan struct{} {
+	stopSignal := make(chan struct{})
+	ticker := time.NewTicker(time.Duration(interval) * time.Millisecond)
 	go func() {
+		defer ticker.Stop()
 		for {
-			go wait()
 			select {
-			case <-trigger:
+			case <-ticker.C:
 				f()
 			case <-stopSignal:
 				return

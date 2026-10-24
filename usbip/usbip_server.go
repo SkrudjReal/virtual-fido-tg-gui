@@ -13,7 +13,10 @@ var usbipLogger = util.NewLogger("[USBIP] ", util.LogLevelTrace)
 var errLogger = util.NewLogger("[ERR] ", util.LogLevelEnabled)
 
 type USBIPServer struct {
-	devices []USBIPDevice
+	devices  []USBIPDevice
+	listener net.Listener
+	mu       sync.Mutex
+	closed   bool
 }
 
 func NewUSBIPServer(devices []USBIPDevice) *USBIPServer {
@@ -25,10 +28,25 @@ func NewUSBIPServer(devices []USBIPDevice) *USBIPServer {
 func (server *USBIPServer) Start() {
 	usbipLogger.Println("Starting USBIP server...")
 	listener, err := net.Listen("tcp", ":3240")
-	util.CheckErr(err, "Could not create listener")
+	if err != nil {
+		usbipLogger.Printf("Could not create listener: %v", err)
+		return
+	}
+	server.mu.Lock()
+	server.listener = listener
+	server.closed = false
+	server.mu.Unlock()
+
 	for {
 		connection, err := listener.Accept()
 		if err != nil {
+			server.mu.Lock()
+			closed := server.closed
+			server.mu.Unlock()
+			if closed {
+				usbipLogger.Println("USBIP server stopped.")
+				return
+			}
 			usbipLogger.Printf("Connection accept error: %v", err)
 			continue
 		}
@@ -43,6 +61,16 @@ func (server *USBIPServer) Start() {
 		}, func(err interface{}) {
 			errLogger.Printf("%v", err)
 		})
+	}
+}
+
+func (server *USBIPServer) Stop() {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	server.closed = true
+	if server.listener != nil {
+		server.listener.Close()
+		server.listener = nil
 	}
 }
 
@@ -101,6 +129,7 @@ func (conn *usbipConnection) handle() {
 
 func (conn *usbipConnection) handleCommands(device USBIPDevice) {
 	for {
+		var readErr bool
 		util.Try(func() {
 			header := util.ReadBE[usbipMessageHeader](conn.conn)
 			usbipLogger.Printf("[MESSAGE HEADER] %s\n\n", header)
@@ -112,8 +141,12 @@ func (conn *usbipConnection) handleCommands(device USBIPDevice) {
 				usbipLogger.Printf("Unsupported Command: %#v\n\n", header)
 			}
 		}, func(err interface{}) {
-			errLogger.Printf("%v", err)
+			readErr = true
+			usbipLogger.Printf("USBIP connection closed: %v", err)
 		})
+		if readErr {
+			break
+		}
 	}
 }
 
@@ -127,13 +160,17 @@ func (conn *usbipConnection) handleCommandSubmit(device USBIPDevice, header usbi
 	}
 	// Getting the reponse may not be immediate, so we need a callback
 	onReturnSubmit := func(response []byte) {
+		var actualData []byte
 		if response != nil {
-			copy(transferBuffer, response)
+			actualData = response
+			if len(actualData) > int(command.TransferBufferLength) {
+				actualData = actualData[:command.TransferBufferLength]
+			}
 		}
 		replyHeader := header.replyHeader()
 		replyBody := usbipReturnSubmitBody{
 			Status:          0,
-			ActualLength:    uint32(len(transferBuffer)),
+			ActualLength:    uint32(len(actualData)),
 			StartFrame:      0,
 			NumberOfPackets: 0,
 			ErrorCount:      0,
@@ -141,9 +178,9 @@ func (conn *usbipConnection) handleCommandSubmit(device USBIPDevice, header usbi
 		}
 		usbipLogger.Printf("[RETURN SUBMIT] %v %#v\n\n", replyHeader, replyBody)
 		reply := util.Concat(util.ToBE(replyHeader), util.ToBE(replyBody))
-		if header.Direction == usbipDirIn {
-			usbipLogger.Printf("[RETURN SUBMIT] DATA: %#v\n\n", transferBuffer)
-			reply = append(reply, transferBuffer...)
+		if header.Direction == usbipDirIn && len(actualData) > 0 {
+			usbipLogger.Printf("[RETURN SUBMIT] DATA: %#v\n\n", actualData)
+			reply = append(reply, actualData...)
 		}
 		conn.writeResponse(reply)
 	}
@@ -173,6 +210,10 @@ func (conn *usbipConnection) handleCommandUnlink(device USBIPDevice, header usbi
 
 func (conn *usbipConnection) writeResponse(data []byte) {
 	conn.responseMutex.Lock()
-	util.Write(conn.conn, data)
-	conn.responseMutex.Unlock()
+	defer conn.responseMutex.Unlock()
+	util.Try(func() {
+		util.Write(conn.conn, data)
+	}, func(err interface{}) {
+		usbipLogger.Printf("writeResponse error: %v", err)
+	})
 }
