@@ -403,6 +403,7 @@ func (s *Server) attachUSBInternal() error {
 	_ = s.detachUSBInternal()
 
 	cmd := exec.Command(exePath, "attach", "-r", "127.0.0.1", "-b", "2-2")
+	configureCommand(cmd)
 	cmd.Dir = binDir
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("attach start failed: %v", err)
@@ -434,6 +435,7 @@ func (s *Server) detachUSBInternal() error {
 
 	// Detach port 0 or all active ports
 	cmd := exec.Command(exePath, "detach", "-p", "0")
+	configureCommand(cmd)
 	cmd.Dir = binDir
 	_, err := cmd.CombinedOutput()
 	s.attached = false
@@ -445,6 +447,7 @@ func (s *Server) queryPortInternal() {
 	binDir := getDriverDir()
 	exePath := filepath.Join(binDir, "usbip.exe")
 	cmd := exec.Command(exePath, "port")
+	configureCommand(cmd)
 	cmd.Dir = binDir
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -793,6 +796,7 @@ func getSystemCmd(name string) string {
 func (s *Server) apiInstallerTestsigning(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	cmd := exec.Command(getSystemCmd("bcdedit.exe"), "/set", "testsigning", "on")
+	configureCommand(cmd)
 	out, err := cmd.CombinedOutput()
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": err == nil,
@@ -804,6 +808,7 @@ func (s *Server) apiInstallerCert(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	certPath := filepath.Join(getDriverDir(), "usbip_test.pfx")
 	cmd := exec.Command(getSystemCmd("certutil.exe"), "-addstore", "-f", "Root", certPath)
+	configureCommand(cmd)
 	out, err := cmd.CombinedOutput()
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": err == nil,
@@ -816,6 +821,7 @@ func (s *Server) apiInstallerDriver(w http.ResponseWriter, r *http.Request) {
 	binDir := getDriverDir()
 	exePath := filepath.Join(binDir, "usbip.exe")
 	cmd := exec.Command(exePath, "install", "-u")
+	configureCommand(cmd)
 	cmd.Dir = binDir
 	out, err := cmd.CombinedOutput()
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -829,6 +835,7 @@ func (s *Server) apiInstallerUninstall(w http.ResponseWriter, r *http.Request) {
 	binDir := getDriverDir()
 	exePath := filepath.Join(binDir, "usbip.exe")
 	cmd := exec.Command(exePath, "uninstall", "-u")
+	configureCommand(cmd)
 	cmd.Dir = binDir
 	out, err := cmd.CombinedOutput()
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -842,6 +849,7 @@ func (s *Server) apiInstallerDiagnose(w http.ResponseWriter, r *http.Request) {
 	binDir := getDriverDir()
 	exePath := filepath.Join(binDir, "usbip.exe")
 	cmd := exec.Command(exePath, "port")
+	configureCommand(cmd)
 	cmd.Dir = binDir
 	out, err := cmd.CombinedOutput()
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -853,6 +861,7 @@ func (s *Server) apiInstallerDiagnose(w http.ResponseWriter, r *http.Request) {
 // Helpers for checks
 func checkTestsigningState() bool {
 	cmd := exec.Command(getSystemCmd("bcdedit.exe"))
+	configureCommand(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return false
@@ -863,6 +872,7 @@ func checkTestsigningState() bool {
 
 func checkCertificateInstalled() bool {
 	cmd := exec.Command(getSystemCmd("certutil.exe"), "-verifystore", "Root", "USBIP Test")
+	configureCommand(cmd)
 	return cmd.Run() == nil
 }
 
@@ -870,6 +880,7 @@ func checkDriverState() (bool, string) {
 	binDir := getDriverDir()
 	exePath := filepath.Join(binDir, "usbip.exe")
 	cmd := exec.Command(exePath, "port")
+	configureCommand(cmd)
 	cmd.Dir = binDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {

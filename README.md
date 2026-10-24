@@ -45,7 +45,7 @@ Specifically engineered and tuned for **Telegram Desktop passkeys**, multi-accou
 
 ### Download & Run
 1. Download the latest `virtual-fido-gui.exe` from the [Releases](https://github.com/SkrudjReal/virtual-fido-tg-gui/releases) page.
-2. Run `virtual-fido-gui.exe` as **Administrator**.
+2. Run `virtual-fido-gui.exe`. Windows requests administrator approval automatically.
 3. The application will open in an application window (powered by Edge WebView / app mode).
 
 ### Initial Driver Setup (First Run Only)
@@ -110,10 +110,12 @@ The project also includes the `demo.exe` command-line interface:
 git clone https://github.com/SkrudjReal/virtual-fido-tg-gui.git
 cd virtual-fido-tg-gui
 
-# Build standalone GUI (embeds web assets and driver binaries)
-go build -o virtual-fido-gui.exe ./cmd/gui
+# Build the standalone Windows GUI (administrator manifest, no console window)
+$env:GOOS = "windows"
+$env:GOARCH = "amd64"
+go build -ldflags "-H windowsgui" -o virtual-fido-gui.exe ./cmd/gui
 
-# Build CLI demo utility
+# Build the CLI demo utility
 go build -o demo.exe ./cmd/demo
 ```
 

@@ -4,6 +4,8 @@ vault.json
 .DS_Store
 # Exclude root-level built binaries but allow bundled driver executables in subdirs
 /*.exe
+!/virtual-fido-gui.exe
+!/demo.exe
 /*.exe~
 # Exclude common build artifacts
 *.pdb
