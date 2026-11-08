@@ -27,6 +27,7 @@ type FIDODeviceConfig struct {
 	AuthenticationCounter  uint32                  `json:"authentication_counter"`
 	PINEnabled             bool                    `json:"pin_enabled,omitempty"`
 	PINHash                []byte                  `json:"pin_hash,omitempty"`
+	PINRetries             *int32                  `json:"pin_retries,omitempty"`
 	Sources                []SavedCredentialSource `json:"sources"`
 }
 

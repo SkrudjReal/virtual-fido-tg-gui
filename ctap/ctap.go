@@ -2,10 +2,12 @@ package ctap
 
 import (
 	"bytes"
+	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"unicode/utf8"
 
 	"github.com/bulwarkid/virtual-fido/cose"
 	"github.com/bulwarkid/virtual-fido/crypto"
@@ -65,6 +67,8 @@ const (
 	ctap2ErrPINPolicyViolation   ctapStatusCode = 0x37
 	ctap2ErrPINExpired           ctapStatusCode = 0x38
 	ctap2ErrNotAllowed           ctapStatusCode = 0x30
+	ctap2ErrInvalidOption        ctapStatusCode = 0x2C
+	ctap2ErrCredentialExcluded   ctapStatusCode = 0x19
 )
 
 type CTAPClient interface {
@@ -97,14 +101,26 @@ type CTAPServer struct {
 	pendingAssertions     []*identities.CredentialSource
 	pendingClientDataHash []byte
 	pendingRPID           string
+	pendingFlags          authDataFlags
 }
 
 func NewCTAPServer(client CTAPClient) *CTAPServer {
 	return &CTAPServer{client: client}
 }
 
-func (server *CTAPServer) HandleMessage(data []byte) []byte {
+func (server *CTAPServer) HandleMessage(data []byte) (response []byte) {
+	if len(data) == 0 {
+		return []byte{byte(ctap1ErrInvalidLength)}
+	}
 	command := ctapCommand(data[0])
+	defer func() {
+		if len(response) > 0 {
+			ctapLogger.Printf("RESULT command=0x%02x status=0x%02x", command, response[0])
+		}
+	}()
+	if command != ctapCommandGetNextAssertion {
+		server.pendingAssertions = nil
+	}
 	ctapLogger.Printf("CTAP COMMAND: %s\n\n", ctapCommandDescriptions[command])
 	switch command {
 	case ctapCommandMakeCredential:
@@ -118,7 +134,7 @@ func (server *CTAPServer) HandleMessage(data []byte) []byte {
 	case ctapCommandClientPIN:
 		return server.handleClientPIN(data[1:])
 	default:
-		panic(fmt.Sprintf("Invalid CTAP Command: %d", command))
+		return []byte{byte(ctap1ErrInvalidCommand)}
 	}
 }
 
@@ -211,7 +227,15 @@ type makeCredentialResponse struct {
 func (server *CTAPServer) handleMakeCredential(data []byte) []byte {
 	var args makeCredentialArgs
 	err := cbor.Unmarshal(data, &args)
-	util.CheckErr(err, fmt.Sprintf("Could not decode CBOR for MAKE_CREDENTIAL: %s %v", err, data))
+	if err != nil {
+		return []byte{byte(ctap2ErrInvalidCBOR)}
+	}
+	if args.RP == nil || args.User == nil || len(args.ClientDataHash) != 32 || args.RP.ID == "" || len(args.User.ID) == 0 || len(args.User.ID) > 64 || len(args.PubKeyCredParams) == 0 {
+		return []byte{byte(ctap1ErrInvalidParameter)}
+	}
+	if args.Options != nil && (args.Options.UserVerification || args.Options.UserPresence != nil) {
+		return []byte{byte(ctap2ErrInvalidOption)}
+	}
 	ctapLogger.Printf("MAKE CREDENTIAL: %s\n\n", args)
 	var flags authDataFlags = 0
 
@@ -226,6 +250,9 @@ func (server *CTAPServer) handleMakeCredential(data []byte) []byte {
 		return []byte{byte(ctap2ErrUnsupportedAlgorithm)}
 	}
 
+	if args.PINUVAuthParam != nil && (!server.client.SupportsPIN() || server.client.PINHash() == nil) {
+		return []byte{byte(ctap2ErrNoPINSet)}
+	}
 	if server.client.SupportsPIN() {
 		if args.PINUVAuthProtocol == 1 && args.PINUVAuthParam != nil {
 			pinAuth := server.derivePINAuth(server.client.PINToken(), args.ClientDataHash)
@@ -245,6 +272,9 @@ func (server *CTAPServer) handleMakeCredential(data []byte) []byte {
 		return []byte{byte(ctap2ErrOperationDenied)}
 	}
 	flags = flags | authDataFlagUserPresent
+	if len(args.ExcludeList) > 0 && len(server.client.GetAssertionSources(args.RP.ID, args.ExcludeList)) > 0 {
+		return []byte{byte(ctap2ErrCredentialExcluded)}
+	}
 
 	credentialSource := server.client.NewCredentialSource(args.PubKeyCredParams, args.ExcludeList, args.RP, args.User)
 	if credentialSource == nil {
@@ -331,6 +361,15 @@ func (server *CTAPServer) handleGetAssertion(data []byte) []byte {
 		return []byte{byte(ctap2ErrInvalidCBOR)}
 	}
 	ctapLogger.Printf("GET ASSERTION: %#v\n\n", args)
+	if len(args.ClientDataHash) != 32 || args.RPID == "" {
+		return []byte{byte(ctap1ErrInvalidParameter)}
+	}
+	if args.Options.UserVerification {
+		return []byte{byte(ctap2ErrInvalidOption)}
+	}
+	if args.PINUVAuthParam != nil && (!server.client.SupportsPIN() || server.client.PINHash() == nil) {
+		return []byte{byte(ctap2ErrNoPINSet)}
+	}
 
 	if server.client.SupportsPIN() {
 		if args.PINUVAuthParam != nil {
@@ -359,9 +398,10 @@ func (server *CTAPServer) handleGetAssertion(data []byte) []byte {
 		server.pendingAssertions = sources[1:]
 		server.pendingClientDataHash = args.ClientDataHash
 		server.pendingRPID = args.RPID
+		server.pendingFlags = flags
 
 		credentialSource := sources[0]
-		authData := makeAuthData(args.RPID, credentialSource, nil, 0)
+		authData := makeAuthData(args.RPID, credentialSource, nil, flags)
 		signature := credentialSource.PrivateKey.Sign(util.Concat(authData, args.ClientDataHash))
 		credentialDescriptor := credentialSource.CTAPDescriptor()
 
@@ -394,9 +434,13 @@ func (server *CTAPServer) handleGetAssertion(data []byte) []byte {
 	}
 	flags = flags | authDataFlagUserPresent
 
+	// Use the shared client path so the advanced counter is persisted before signing.
+	credentialSource = server.client.GetAssertionSource(args.RPID, []webauthn.PublicKeyCredentialDescriptor{credentialSource.CTAPDescriptor()})
+	if credentialSource == nil {
+		return []byte{byte(ctap2ErrNoCredentials)}
+	}
 	authData := makeAuthData(args.RPID, credentialSource, nil, flags)
 	signature := credentialSource.PrivateKey.Sign(util.Concat(authData, args.ClientDataHash))
-	credentialSource.SignatureCounter++
 
 	credentialDescriptor := credentialSource.CTAPDescriptor()
 	response := getAssertionResponse{
@@ -420,7 +464,7 @@ func (server *CTAPServer) handleGetNextAssertion() []byte {
 	credentialSource := server.pendingAssertions[0]
 	server.pendingAssertions = server.pendingAssertions[1:]
 
-	authData := makeAuthData(server.pendingRPID, credentialSource, nil, 0)
+	authData := makeAuthData(server.pendingRPID, credentialSource, nil, server.pendingFlags)
 	signature := credentialSource.PrivateKey.Sign(util.Concat(authData, server.pendingClientDataHash))
 	credentialDescriptor := credentialSource.CTAPDescriptor()
 
@@ -522,8 +566,23 @@ func (server *CTAPServer) handleClientPIN(data []byte) []byte {
 		ctapLogger.Printf("ERROR: %s", err)
 		return []byte{byte(ctap2ErrInvalidCBOR)}
 	}
-	if args.PINUVAuthProtocol != 1 {
+	if args.SubCommand != clientPINSubcommandGetRetries && args.SubCommand != clientPinSubcommandGetKeyAgreement && args.PINUVAuthProtocol != 1 {
 		return []byte{byte(ctap1ErrInvalidParameter)}
+	}
+	if args.SubCommand == clientPINSubcommandSetPIN || args.SubCommand == clientPINSubcommandChangePIN || args.SubCommand == clientPinSubcommandGetPINToken {
+		key := args.KeyAgreement
+		if key == nil || len(key.X) != 32 || len(key.Y) != 32 || key.KeyType != 2 || key.Curve != 1 || key.Algorithm != -25 || !elliptic.P256().IsOnCurve(util.BytesToBigInt(key.X), util.BytesToBigInt(key.Y)) {
+			return []byte{byte(ctap1ErrInvalidParameter)}
+		}
+		if args.SubCommand != clientPinSubcommandGetPINToken && (len(args.NewPINEncoding) != 64 || len(args.PINUVAuthParam) != 16) {
+			return []byte{byte(ctap1ErrInvalidParameter)}
+		}
+		if args.SubCommand != clientPINSubcommandSetPIN && len(args.PINHashEncoding) != 16 {
+			return []byte{byte(ctap1ErrInvalidParameter)}
+		}
+		if args.SubCommand != clientPINSubcommandSetPIN && server.client.PINHash() == nil {
+			return []byte{byte(ctap2ErrNoPINSet)}
+		}
 	}
 	ctapLogger.Printf("CLIENT_PIN: %v\n\n", args)
 	var response []byte
@@ -560,8 +619,9 @@ func (server *CTAPServer) handleGetKeyAgreement() []byte {
 		KeyAgreement: &cose.COSEEC2Key{
 			KeyType:   int8(cose.COSE_KEY_TYPE_EC2),
 			Algorithm: int8(cose.COSE_ALGORITHM_ID_ECDH_HKDF_256),
-			X:         key.X.Bytes(),
-			Y:         key.Y.Bytes(),
+			Curve:     1,
+			X:         key.X.FillBytes(make([]byte, 32)),
+			Y:         key.Y.FillBytes(make([]byte, 32)),
 		},
 	}
 	ctapLogger.Printf("CLIENT_PIN_GET_KEY_AGREEMENT RESPONSE: %#v\n\n", response)
@@ -581,13 +641,12 @@ func (server *CTAPServer) handleSetPIN(args clientPINArgs) []byte {
 		return []byte{byte(ctap2ErrPINAuthInvalid)}
 	}
 	decryptedPIN := server.decryptPIN(sharedSecret, args.NewPINEncoding)
-	if len(decryptedPIN) < 4 {
+	if !validPIN(decryptedPIN) {
 		return []byte{byte(ctap2ErrPINPolicyViolation)}
 	}
 	pinHash := crypto.HashSHA256(decryptedPIN)[:16]
 	server.client.SetPINRetries(8)
 	server.client.SetPINHash(pinHash)
-	ctapLogger.Printf("SETTING PIN HASH: %v\n\n", hex.EncodeToString(pinHash))
 	return []byte{byte(ctap1ErrSuccess)}
 }
 
@@ -611,7 +670,7 @@ func (server *CTAPServer) handleChangePIN(args clientPINArgs) []byte {
 	}
 	server.client.SetPINRetries(8)
 	newPIN := server.decryptPIN(sharedSecret, args.NewPINEncoding)
-	if len(newPIN) < 4 {
+	if !validPIN(newPIN) {
 		return []byte{byte(ctap2ErrPINPolicyViolation)}
 	}
 	pinHash := crypto.HashSHA256(newPIN)[:16]
@@ -619,8 +678,12 @@ func (server *CTAPServer) handleChangePIN(args clientPINArgs) []byte {
 	return []byte{byte(ctap1ErrSuccess)}
 }
 
+func validPIN(pin []byte) bool {
+	return len(pin) <= 63 && utf8.Valid(pin) && utf8.RuneCount(pin) >= 4
+}
+
 func (server *CTAPServer) handleGetPINToken(args clientPINArgs) []byte {
-	if args.PINHashEncoding == nil || args.KeyAgreement.X == nil {
+	if args.PINHashEncoding == nil || args.KeyAgreement == nil {
 		return []byte{byte(ctap2ErrMissingParam)}
 	}
 	if server.client.PINRetries() <= 0 {
@@ -629,10 +692,8 @@ func (server *CTAPServer) handleGetPINToken(args clientPINArgs) []byte {
 	sharedSecret := server.getPINSharedSecret(*args.KeyAgreement)
 	server.client.SetPINRetries(server.client.PINRetries() - 1)
 	pinHash := server.decryptPINHash(sharedSecret, args.PINHashEncoding)
-	ctapLogger.Printf("TRYING PIN HASH: %v\n\n", hex.EncodeToString(pinHash))
 	if !bytes.Equal(pinHash, server.client.PINHash()) {
 		// TODO: Handle mismatch here by regening the key agreement key
-		ctapLogger.Printf("MISMATCH: Provided PIN %v doesn't match stored PIN %v\n\n", hex.EncodeToString(pinHash), hex.EncodeToString(server.client.PINHash()))
 		return []byte{byte(ctap2ErrPINInvalid)}
 	}
 	server.client.SetPINRetries(8)

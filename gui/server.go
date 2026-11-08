@@ -10,11 +10,11 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -28,49 +28,6 @@ import (
 
 //go:embed web/*
 var webFiles embed.FS
-
-//go:embed driver_bin/*
-var driverFiles embed.FS
-
-func getDriverDir() string {
-	// 1. Check local ./cmd/demo/usbip/bin/usbip.exe (source tree dev mode)
-	devPath, _ := filepath.Abs(filepath.Join(".", "cmd", "demo", "usbip", "bin"))
-	if _, err := os.Stat(filepath.Join(devPath, "usbip.exe")); err == nil {
-		return devPath
-	}
-
-	// 2. Check local ./bin/usbip.exe (portable folder mode)
-	localBin, _ := filepath.Abs(filepath.Join(".", "bin"))
-	if _, err := os.Stat(filepath.Join(localBin, "usbip.exe")); err == nil {
-		return localBin
-	}
-
-	// 3. Fallback to AppData / Local directory: %LOCALAPPDATA%\VirtualFIDO\bin
-	appData := os.Getenv("LOCALAPPDATA")
-	targetDir := localBin
-	if appData != "" {
-		targetDir = filepath.Join(appData, "VirtualFIDO", "bin")
-	}
-
-	_ = os.MkdirAll(targetDir, 0755)
-
-	// Extract embedded files if usbip.exe is missing
-	if _, err := os.Stat(filepath.Join(targetDir, "usbip.exe")); err != nil {
-		entries, err := fs.ReadDir(driverFiles, "driver_bin")
-		if err == nil {
-			for _, entry := range entries {
-				if entry.IsDir() {
-					continue
-				}
-				data, err := driverFiles.ReadFile("driver_bin/" + entry.Name())
-				if err == nil {
-					_ = os.WriteFile(filepath.Join(targetDir, entry.Name()), data, 0755)
-				}
-			}
-		}
-	}
-	return targetDir
-}
 
 type LogEntry struct {
 	Time    string `json:"time"`
@@ -110,15 +67,16 @@ type IdentityDTO struct {
 }
 
 type Server struct {
-	vaultFilename   string
-	vaultPassphrase string
-	client          *fido_client.DefaultFIDOClient
-	usbipServer     *usbip.USBIPServer
-	usbAttachCmd    *exec.Cmd
-	httpServer      *http.Server
+	vaultFilename     string
+	vaultPassphrase   string
+	client            *fido_client.DefaultFIDOClient
+	usbipServer       *usbip.USBIPServer
+	attachedDriverDir string
+	httpServer        *http.Server
 
 	mu         sync.Mutex
 	running    bool
+	installing bool
 	attached   bool
 	activePort string
 
@@ -132,10 +90,11 @@ type Server struct {
 	selectionMu           sync.Mutex
 
 	// Log buffering and SSE distribution
-	logMu      sync.Mutex
-	logs       []LogEntry
-	sseMu      sync.Mutex
-	sseClients map[chan string]bool
+	logMu       sync.Mutex
+	logs        []LogEntry
+	diagnostics []LogEntry
+	sseMu       sync.Mutex
+	sseClients  map[chan string]bool
 }
 
 func NewServer(vaultFile, passphrase string) *Server {
@@ -168,7 +127,7 @@ func (s *Server) initClient() {
 	virtual_fido.SetLogOutput(mw)
 	virtual_fido.SetLogLevel(util.LogLevelDebug)
 
-	client := fido_client.NewDefaultClient(certificateAuthority, caPrivateKey, encryptionKey, false, s, s)
+	client := fido_client.NewDefaultClient(certificateAuthority, caPrivateKey, encryptionKey, true, s, s)
 	client.SetAccountSelector(s)
 	s.client = client
 }
@@ -197,6 +156,12 @@ func (s *Server) Write(p []byte) (n int, err error) {
 
 		s.logMu.Lock()
 		s.logs = append(s.logs, entry)
+		if tag == "DIAGNOSTIC" || (tag == "CTAP" && strings.HasPrefix(msg, "RESULT command=")) {
+			s.diagnostics = append(s.diagnostics, entry)
+			if len(s.diagnostics) > 300 {
+				s.diagnostics = s.diagnostics[1:]
+			}
+		}
 		if len(s.logs) > 300 {
 			s.logs = s.logs[1:]
 		}
@@ -307,25 +272,27 @@ func (s *Server) SelectAssertionSource(sources []*identities.CredentialSource) *
 			s.selectionMu.Unlock()
 			return sources[choice]
 		}
-		return sources[0]
+		return nil
 	case <-time.After(60 * time.Second):
 		s.pendingApprovalMu.Lock()
 		delete(s.pendingSelections, reqID)
 		delete(s.approvalReqDetails, reqID)
 		s.pendingApprovalMu.Unlock()
-		return sources[0]
+		return nil
 	}
 }
 
 // fido_client.ClientDataSaver implementation
 func (s *Server) SaveData(data []byte) {
-	f, err := os.OpenFile(s.vaultFilename, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
-	if err != nil {
-		fmt.Printf("SaveData open error: %v\n", err)
-		return
-	}
+	f, err := os.CreateTemp(filepath.Dir(s.vaultFilename), ".virtual-fido-vault-*")
+	util.CheckErr(err, "Could not create vault file")
+	defer os.Remove(f.Name())
 	defer f.Close()
-	_, _ = f.Write(data)
+	_, err = f.Write(data)
+	util.CheckErr(err, "Could not write vault")
+	util.CheckErr(f.Sync(), "Could not sync vault")
+	util.CheckErr(f.Close(), "Could not close vault")
+	util.CheckErr(os.Rename(f.Name(), s.vaultFilename), "Could not replace vault")
 }
 
 func (s *Server) RetrieveData() []byte {
@@ -350,6 +317,14 @@ func (s *Server) StartDaemon() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.installing {
+		return fmt.Errorf("USBip installation is in progress")
+	}
+	if installedUSBIPDir() == "" {
+		err := fmt.Errorf("install the signed USBip driver from Setup & Drivers first")
+		fmt.Fprintf(s, "[DIAGNOSTIC] %v\n", err)
+		return err
+	}
 	if s.running {
 		// If running, ensure attached
 		return s.attachUSBInternal()
@@ -364,8 +339,8 @@ func (s *Server) StartDaemon() error {
 		s.mu.Lock()
 		s.running = false
 		s.attached = false
-		s.mu.Unlock()
 		s.broadcastStatus()
+		s.mu.Unlock()
 	}()
 
 	// Allow server socket to listen
@@ -379,7 +354,10 @@ func (s *Server) StopDaemon() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_ = s.detachUSBInternal()
+	if err := s.detachUSBInternal(); err != nil {
+		fmt.Fprintf(s, "[DIAGNOSTIC] Detach failed: %v\n", err)
+		return err
+	}
 
 	if s.usbipServer != nil {
 		s.usbipServer.Stop()
@@ -392,71 +370,60 @@ func (s *Server) StopDaemon() error {
 	return nil
 }
 
-func (s *Server) attachUSBInternal() error {
-	binDir := getDriverDir()
-	exePath := filepath.Join(binDir, "usbip.exe")
-	if _, err := os.Stat(exePath); err != nil {
-		return fmt.Errorf("usbip.exe not found at %s", exePath)
-	}
-
-	// First detach any existing ports to avoid conflicts
-	_ = s.detachUSBInternal()
-
-	cmd := exec.Command(exePath, "attach", "-r", "127.0.0.1", "-b", "2-2")
-	configureCommand(cmd)
-	cmd.Dir = binDir
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("attach start failed: %v", err)
-	}
-	s.usbAttachCmd = cmd
-
-	go func() {
-		_ = cmd.Wait()
-		s.mu.Lock()
-		s.attached = false
-		s.mu.Unlock()
-		s.broadcastStatus()
+func (s *Server) attachUSBInternal() (err error) {
+	defer func() {
+		if err != nil {
+			fmt.Fprintf(s, "[DIAGNOSTIC] Attach failed: %v\n", err)
+		}
 	}()
-
-	time.Sleep(400 * time.Millisecond)
-	s.attached = true
 	s.queryPortInternal()
+	if s.attached {
+		return nil
+	}
+	binDir, modern := usbipBackend()
+	args := []string{"attach", "-r", "127.0.0.1", "-b", "2-2", "--terse"}
+	if modern {
+		args = append(args, "--once")
+	}
+	out, err := runUSBIP(binDir, args...)
+	if err != nil {
+		return fmt.Errorf("USB/IP attach failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	port, err := attachedPort(out, modern)
+	if err != nil {
+		return err
+	}
+	s.activePort = port
+	s.attachedDriverDir = binDir
+	s.queryPortInternal()
+	if !s.attached {
+		return fmt.Errorf("USB/IP port %s did not appear; check the installed driver", port)
+	}
+	fmt.Fprintf(s, "[DIAGNOSTIC] Attached: backend=%s port=%s\n", backendName(modern), port)
 	return nil
 }
 
 func (s *Server) detachUSBInternal() error {
-	binDir := getDriverDir()
-	exePath := filepath.Join(binDir, "usbip.exe")
-
-	if s.usbAttachCmd != nil && s.usbAttachCmd.Process != nil {
-		_ = s.usbAttachCmd.Process.Kill()
-		s.usbAttachCmd = nil
+	if s.activePort == "" || s.attachedDriverDir == "" {
+		return nil
 	}
-
-	// Detach port 0 or all active ports
-	cmd := exec.Command(exePath, "detach", "-p", "0")
-	configureCommand(cmd)
-	cmd.Dir = binDir
-	_, err := cmd.CombinedOutput()
+	_, err := runUSBIP(s.attachedDriverDir, "detach", "-p", s.activePort)
+	if err != nil {
+		return err
+	}
 	s.attached = false
 	s.activePort = ""
+	s.attachedDriverDir = ""
 	return err
 }
 
 func (s *Server) queryPortInternal() {
-	binDir := getDriverDir()
-	exePath := filepath.Join(binDir, "usbip.exe")
-	cmd := exec.Command(exePath, "port")
-	configureCommand(cmd)
-	cmd.Dir = binDir
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		outStr := string(out)
-		if strings.Contains(outStr, "Port 00") || strings.Contains(outStr, "Port 0") {
-			s.activePort = "Port 0"
-			s.attached = true
-		}
+	s.attached = false
+	if s.activePort == "" || s.attachedDriverDir == "" {
+		return
 	}
+	out, err := runUSBIP(s.attachedDriverDir, "port")
+	s.attached = err == nil && hasPort(out, s.activePort)
 }
 
 // SSE & Status broadcasting
@@ -486,6 +453,15 @@ func (s *Server) broadcastStatus() {
 
 // HTTP Server & Router
 func (s *Server) StartHTTPServer(addr string) error {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	return s.Serve(listener)
+}
+
+func (s *Server) Serve(listener net.Listener) error {
+	defer listener.Close()
 	mux := http.NewServeMux()
 
 	// Embedded web assets
@@ -504,31 +480,57 @@ func (s *Server) StartHTTPServer(addr string) error {
 	mux.HandleFunc("/api/approve", s.apiApprove)
 	mux.HandleFunc("/api/pin", s.apiPIN)
 	mux.HandleFunc("/api/events", s.apiEvents)
+	mux.HandleFunc("/api/diagnostics", s.apiDiagnostics)
 
 	// Installer routes
 	mux.HandleFunc("/api/installer/status", s.apiInstallerStatus)
-	mux.HandleFunc("/api/installer/testsigning", s.apiInstallerTestsigning)
-	mux.HandleFunc("/api/installer/cert", s.apiInstallerCert)
 	mux.HandleFunc("/api/installer/driver", s.apiInstallerDriver)
 	mux.HandleFunc("/api/installer/uninstall", s.apiInstallerUninstall)
 	mux.HandleFunc("/api/installer/diagnose", s.apiInstallerDiagnose)
 
 	s.httpServer = &http.Server{
-		Addr:    addr,
+		Addr:    listener.Addr().String(),
 		Handler: mux,
 	}
 
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
+	s.httpServer.Handler = localUIHandler(listener.Addr().String(), mux)
 
 	fmt.Printf("\n[GUI] Virtual FIDO2 Manager running at http://%s\n", listener.Addr().String())
 	return s.httpServer.Serve(listener)
 }
 
+func backendName(modern bool) string {
+	if modern {
+		return "usbip-win2"
+	}
+	return "legacy-test-signed"
+}
+
+func (s *Server) apiDiagnostics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.mu.Lock()
+	s.queryPortInternal()
+	report := map[string]interface{}{
+		"build": "signed-mvp-20261107-relaunch", "platform": runtime.GOOS, "architecture": runtime.GOARCH,
+		"backend": "usbip-win2-signed", "signedInstalled": installedUSBIPDir() != "", "running": s.running, "attached": s.attached, "port": s.activePort,
+		"pinEnabled": s.client.SupportsPIN(), "pinConfigured": s.client.PINHash() != nil,
+	}
+	s.mu.Unlock()
+	s.logMu.Lock()
+	report["events"] = append([]LogEntry{}, s.diagnostics...)
+	s.logMu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", `attachment; filename="virtual-fido-diagnostics.json"`)
+	_ = json.NewEncoder(w).Encode(report)
+}
+
 // API Handlers
 func (s *Server) apiStatus(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.queryPortInternal()
 	res := map[string]interface{}{
 		"running":  s.running,
@@ -641,8 +643,12 @@ func (s *Server) apiApprove(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if ch, ok := s.pendingSelections[resp.ID]; ok {
+		choice := -1
+		if resp.Approved {
+			choice = resp.SelectedIndex
+		}
 		select {
-		case ch <- resp.SelectedIndex:
+		case ch <- choice:
 		default:
 		}
 		delete(s.pendingSelections, resp.ID)
@@ -656,9 +662,9 @@ func (s *Server) apiApprove(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiPIN(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method == http.MethodGet {
-		// Placeholder for PIN enabled status
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"enabled": false,
+			"enabled":    s.client.SupportsPIN(),
+			"configured": s.client.PINHash() != nil,
 		})
 		return
 	}
@@ -681,9 +687,8 @@ func (s *Server) apiPIN(w http.ResponseWriter, r *http.Request) {
 			s.client.DisablePIN()
 			_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
 		case "set":
-			pinNum, err := strconv.Atoi(req.PIN)
-			if err != nil || pinNum < 0 || len(req.PIN) < 4 {
-				_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Invalid PIN (4+ digits required)"})
+			if !regexp.MustCompile(`^[0-9]{4,8}$`).MatchString(req.PIN) {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Invalid PIN (4 to 8 digits required)"})
 				return
 			}
 			s.client.SetPIN([]byte(req.PIN))
@@ -720,6 +725,7 @@ func (s *Server) apiEvents(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Send initial status
+	s.mu.Lock()
 	s.queryPortInternal()
 	status := map[string]interface{}{
 		"running":  s.running,
@@ -727,6 +733,7 @@ func (s *Server) apiEvents(w http.ResponseWriter, r *http.Request) {
 		"port":     s.activePort,
 		"vault":    s.vaultFilename,
 	}
+	s.mu.Unlock()
 	stData, _ := json.Marshal(status)
 	fmt.Fprintf(w, "event: status\ndata: %s\n\n", string(stData))
 
@@ -755,25 +762,43 @@ func (s *Server) apiEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// The elevated local API must only accept requests addressed to this UI.
+func localUIHandler(host string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != host {
+			http.Error(w, "Invalid host", http.StatusForbidden)
+			return
+		}
+		if origin := r.Header.Get("Origin"); origin != "" {
+			u, err := url.Parse(origin)
+			if err != nil || u.Scheme != "http" || u.Host != host {
+				http.Error(w, "Invalid origin", http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // Installer API Endpoints
 func (s *Server) apiInstallerStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// 1. Check testsigning
-	testsigning := checkTestsigningState()
-
-	// 2. Check cert
-	certOk := checkCertificateInstalled()
-
 	// 3. Check driver
 	driverOk, portDetails := checkDriverState()
+	s.mu.Lock()
+	s.queryPortInternal()
+	portsOK := s.attached
+	installing := s.installing
+	s.mu.Unlock()
 
 	res := map[string]interface{}{
-		"testsigning": testsigning,
-		"certificate": certOk,
-		"driver":      driverOk,
-		"portsOk":     driverOk && portDetails != "",
-		"portDetails": portDetails,
+		"driver":          driverOk,
+		"portsOk":         portsOK,
+		"portDetails":     portDetails,
+		"modernBackend":   true,
+		"signedInstalled": installedUSBIPDir() != "",
+		"installing":      installing,
 	}
 	_ = json.NewEncoder(w).Encode(res)
 }
@@ -793,102 +818,63 @@ func getSystemCmd(name string) string {
 	return name
 }
 
-func (s *Server) apiInstallerTestsigning(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	cmd := exec.Command(getSystemCmd("bcdedit.exe"), "/set", "testsigning", "on")
-	configureCommand(cmd)
-	out, err := cmd.CombinedOutput()
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": err == nil,
-		"output":  string(out),
-	})
-}
-
-func (s *Server) apiInstallerCert(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	certPath := filepath.Join(getDriverDir(), "usbip_test.pfx")
-	cmd := exec.Command(getSystemCmd("certutil.exe"), "-addstore", "-f", "Root", certPath)
-	configureCommand(cmd)
-	out, err := cmd.CombinedOutput()
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": err == nil,
-		"output":  string(out),
-	})
-}
-
 func (s *Server) apiInstallerDriver(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	binDir := getDriverDir()
-	exePath := filepath.Join(binDir, "usbip.exe")
-	cmd := exec.Command(exePath, "install", "-u")
-	configureCommand(cmd)
-	cmd.Dir = binDir
-	out, err := cmd.CombinedOutput()
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.mu.Lock()
+	if s.running || s.installing {
+		s.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "output": "Stop the token before installing USBip; another setup must not be running."})
+		return
+	}
+	s.installing = true
+	s.mu.Unlock()
+	defer func() { s.mu.Lock(); s.installing = false; s.mu.Unlock() }()
+	err := installSignedDriver()
+	output := "Signed USBip installed. Restart Windows, then start the token."
+	if err != nil {
+		output = err.Error()
+	}
+	fmt.Fprintf(s, "[DIAGNOSTIC] Signed driver setup: %s\n", output)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": err == nil,
-		"output":  string(out),
+		"success":         err == nil,
+		"output":          output,
+		"restartRequired": err == nil,
 	})
 }
 
 func (s *Server) apiInstallerUninstall(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	binDir := getDriverDir()
-	exePath := filepath.Join(binDir, "usbip.exe")
-	cmd := exec.Command(exePath, "uninstall", "-u")
-	configureCommand(cmd)
-	cmd.Dir = binDir
-	out, err := cmd.CombinedOutput()
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": err == nil,
-		"output":  string(out),
-	})
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "output": "Manage USBip through Windows Settings > Apps > Installed apps. Stop the token before changing drivers."})
 }
 
 func (s *Server) apiInstallerDiagnose(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	binDir := getDriverDir()
-	exePath := filepath.Join(binDir, "usbip.exe")
-	cmd := exec.Command(exePath, "port")
-	configureCommand(cmd)
-	cmd.Dir = binDir
-	out, err := cmd.CombinedOutput()
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": err == nil,
-		"output":  string(out),
-	})
+	dir, _ := usbipBackend()
+	out, err := runUSBIP(dir, "port")
+	output := string(out)
+	if err != nil {
+		output += err.Error()
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": err == nil, "output": output})
 }
 
 // Helpers for checks
-func checkTestsigningState() bool {
-	cmd := exec.Command(getSystemCmd("bcdedit.exe"))
-	configureCommand(cmd)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return false
-	}
-	re := regexp.MustCompile(`(?i)testsigning\s+yes`)
-	return re.Match(out)
-}
-
-func checkCertificateInstalled() bool {
-	cmd := exec.Command(getSystemCmd("certutil.exe"), "-verifystore", "Root", "USBIP Test")
-	configureCommand(cmd)
-	return cmd.Run() == nil
-}
-
 func checkDriverState() (bool, string) {
-	binDir := getDriverDir()
-	exePath := filepath.Join(binDir, "usbip.exe")
-	cmd := exec.Command(exePath, "port")
-	configureCommand(cmd)
-	cmd.Dir = binDir
-	out, err := cmd.CombinedOutput()
+	dir, _ := usbipBackend()
+	out, err := runUSBIP(dir, "port")
 	if err != nil {
 		return false, ""
 	}
-	outStr := string(out)
-	if strings.Contains(outStr, "Port") {
-		return true, "Port 0 (Imported)"
+	if portLine.Match(out) {
+		return true, "Imported USB devices present"
 	}
 	return true, "Driver loaded (Idle)"
 }

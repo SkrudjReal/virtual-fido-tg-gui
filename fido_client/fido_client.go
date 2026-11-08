@@ -144,10 +144,7 @@ func (client *DefaultFIDOClient) SelectAssertionSource(sources []*identities.Cre
 		return sources[0]
 	}
 	if client.accountSelector != nil {
-		selected := client.accountSelector.SelectAssertionSource(sources)
-		if selected != nil {
-			return selected
-		}
+		return client.accountSelector.SelectAssertionSource(sources)
 	}
 	fmt.Printf("\nMultiple accounts found for \"%s\":\n", sources[0].RelyingParty.Name)
 	for i, s := range sources {
@@ -220,22 +217,26 @@ func (client *DefaultFIDOClient) PINHash() []byte {
 }
 
 func (client *DefaultFIDOClient) SetPIN(pin []byte) {
+	client.pinEnabled = true
+	client.pinRetries = 8
 	pinHash := crypto.HashSHA256(pin)[:16]
 	client.SetPINHash(pinHash)
 }
 
 func (client *DefaultFIDOClient) SetPINHash(newHash []byte) {
 	client.pinHash = newHash
+	client.pinToken = crypto.RandomBytes(16)
 	client.saveData()
 }
 
 func (client *DefaultFIDOClient) PINRetries() int32 {
-	util.Assert(client.pinRetries > 0 && client.pinRetries <= 8, "Invalid PIN Retries")
+	util.Assert(client.pinRetries >= 0 && client.pinRetries <= 8, "Invalid PIN Retries")
 	return client.pinRetries
 }
 
 func (client *DefaultFIDOClient) SetPINRetries(retries int32) {
 	client.pinRetries = retries
+	client.saveData()
 }
 
 func (client *DefaultFIDOClient) PINKeyAgreement() *crypto.ECDHKey {
@@ -290,6 +291,7 @@ func (client *DefaultFIDOClient) exportData(passphrase string) []byte {
 		AuthenticationCounter:  client.authenticationCounter,
 		PINEnabled:             client.pinEnabled,
 		PINHash:                client.pinHash,
+		PINRetries:             &client.pinRetries,
 		Sources:                identityData,
 	}
 	savedBytes, err := identities.EncryptFIDOState(state, passphrase)
@@ -314,6 +316,9 @@ func (client *DefaultFIDOClient) importData(data []byte, passphrase string) erro
 	client.authenticationCounter = state.AuthenticationCounter
 	client.pinEnabled = state.PINEnabled
 	client.pinHash = state.PINHash
+	if state.PINRetries != nil && *state.PINRetries >= 0 && *state.PINRetries <= 8 {
+		client.pinRetries = *state.PINRetries
+	}
 	client.vault = identities.NewIdentityVault()
 	client.vault.Import(state.Sources)
 	return nil

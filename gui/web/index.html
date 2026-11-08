@@ -232,7 +232,7 @@
         <div>
           <h2 style="font-size: 20px; font-weight: 700; color: #fff;">Windows Driver & Setup Wizard</h2>
           <p style="font-size: 13px; color: #94a3b8; margin-top: 4px;">
-            Configure Windows 11 kernel environment, install USB/IP test certificates, and deploy the virtual VHCI USB controller.
+            Install the bundled Microsoft-signed USB/IP controller for Windows 10 / 11. No Test Mode or test certificate required.
           </p>
         </div>
         <div style="display: flex; gap: 10px; align-items: center;">
@@ -249,69 +249,36 @@
         </div>
       </div>
 
+      <div class="m3-card" style="margin-bottom: 20px; padding: 20px;">
+        <h2 class="card-title">Signed USBip driver</h2>
+        <p>The official USBip 0.9.8.1 x64 installer is included in this app. Click Install signed USBip below;
+          its checksum and Authenticode signature are checked before the official setup wizard opens.</p>
+        <p>Back up your vault and stop the token first. Installation can briefly reconnect USB devices.
+          Windows will not restart automatically; restart it yourself when setup finishes.</p>
+        <p>For migration, uninstall the old test-signed controller using its original installer before disabling Test Mode.
+          This application does not change boot settings.</p>
+      </div>
       <!-- 4 Steps Checklist -->
       <div class="wizard-steps">
-        <!-- Step 1: Windows Testsigning Mode -->
-        <div class="wizard-step-card" id="step-card-testsigning">
-          <div class="step-info-col">
-            <div class="step-num-badge">1</div>
-            <div>
-              <div class="step-title">Windows Testsigning Mode</div>
-              <div class="step-desc">
-                Allows Windows to load test-signed kernel-mode drivers like the USB/IP virtual host controller.
-              </div>
-              <div class="step-command">bcdedit.exe /set testsigning on</div>
-            </div>
-          </div>
-          <div class="step-actions">
-            <span class="m3-chip" id="badge-testsigning">Checking...</span>
-            <button class="m3-btn m3-btn-tonal" onclick="enableTestsigning()" id="btn-enable-testsigning">
-              Enable Testsigning
-            </button>
-          </div>
-        </div>
-
-        <!-- Step 2: USB/IP Root Certificate -->
-        <div class="wizard-step-card" id="step-card-cert">
-          <div class="step-info-col">
-            <div class="step-num-badge">2</div>
-            <div>
-              <div class="step-title">USB/IP Test Certificate</div>
-              <div class="step-desc">
-                Imports <code>usbip_test.pfx</code> into the Windows Trusted Root Certification Authorities store.
-              </div>
-              <div class="step-command">certutil.exe -addstore -f "Root" usbip_test.pfx</div>
-            </div>
-          </div>
-          <div class="step-actions">
-            <span class="m3-chip" id="badge-cert">Checking...</span>
-            <button class="m3-btn m3-btn-tonal" onclick="installCert()" id="btn-install-cert">
-              Install Certificate
-            </button>
-          </div>
-        </div>
-
         <!-- Step 3: VHCI UDE Driver -->
         <div class="wizard-step-card" id="step-card-driver">
           <div class="step-info-col">
-            <div class="step-num-badge">3</div>
+            <div class="step-num-badge">1</div>
             <div>
-              <div class="step-title">Virtual Host Controller (VHCI UDE Driver)</div>
+              <div class="step-title">Microsoft-signed USB/IP controller</div>
               <div class="step-desc">
-                Installs the kernel-mode driver that exposes the virtual USB controller to Windows Device Manager.
+                Opens the official signed USBip installer. Windows 10 x64 version 1903 or newer, and Windows 11 x64.
               </div>
-              <div class="step-command">usbip.exe install -u</div>
+              <div class="step-command">USBip 0.9.8.1 · SHA-256 + Authenticode verification</div>
             </div>
           </div>
           <div class="step-actions">
             <span class="m3-chip" id="badge-driver">Checking...</span>
             <div style="display: flex; gap: 8px;">
               <button class="m3-btn m3-btn-tonal" onclick="installDriver()" id="btn-install-driver">
-                Install Driver
+                Install signed USBip
               </button>
-              <button class="m3-btn m3-btn-outlined" onclick="uninstallDriver()" id="btn-uninstall-driver" style="color: var(--md-sys-color-error); border-color: rgba(242,184,181,0.3);">
-                Uninstall
-              </button>
+
             </div>
           </div>
         </div>
@@ -319,7 +286,7 @@
         <!-- Step 4: Loopback Verification -->
         <div class="wizard-step-card" id="step-card-port">
           <div class="step-info-col">
-            <div class="step-num-badge">4</div>
+            <div class="step-num-badge">2</div>
             <div>
               <div class="step-title">Loopback & Port Verification</div>
               <div class="step-desc">
@@ -370,6 +337,7 @@
           <button class="m3-btn m3-btn-tonal" onclick="clearLogs()" style="height: 32px; padding: 0 14px; font-size: 12px;">
             Clear Logs
           </button>
+          <a class="m3-btn m3-btn-tonal" href="/api/diagnostics" download style="height: 32px; padding: 0 14px; font-size: 12px;">Save diagnostics</a>
         </div>
       </div>
 
@@ -405,6 +373,7 @@
           <div style="padding-top: 10px;">
             <p style="font-size: 13px; color: var(--md-sys-color-on-surface-variant); margin-bottom: 20px; line-height: 1.5;">
               When PIN is enabled, Windows Hello will prompt for your Token PIN before generating credentials or signing assertions.
+              Set a PIN for services that require user verification, then stop and start the token so Windows refreshes its capabilities.
             </p>
 
             <div class="m3-text-field">

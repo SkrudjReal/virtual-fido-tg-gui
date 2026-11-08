@@ -1,30 +1,51 @@
 package util
 
-import (
-	"testing"
-
-	"github.com/bulwarkid/virtual-fido/test"
-)
+import "testing"
 
 func TestRequestBuffer(t *testing.T) {
 	buffer := MakeRequestBuffer()
-	makeRequest := func(val []byte) func([]byte) {
-		return func(response []byte) {
-			test.AssertEqual(t, response[0], val[0], "Request does not equal response")
+	received := make(chan byte, 6)
+	for id := uint32(1); id <= 3; id++ {
+		expected := byte(id)
+		buffer.Request(id, func(response []byte) {
+			if response[0] != expected {
+				received <- 0
+			} else {
+				received <- response[0]
+			}
+		})
+	}
+	for value := byte(1); value <= 6; value++ {
+		buffer.Respond([]byte{value})
+	}
+	for id := uint32(4); id <= 6; id++ {
+		if !buffer.Request(id, func(response []byte) { received <- response[0] }) {
+			t.Fatal("queued response was not delivered")
 		}
 	}
-	buffer.Request(1, makeRequest([]byte{1}))
-	buffer.Request(2, makeRequest([]byte{2}))
-	buffer.Request(3, makeRequest([]byte{3}))
-	go func() {
-		buffer.Respond([]byte{1})
-		buffer.Respond([]byte{2})
-		buffer.Respond([]byte{3})
-		buffer.Respond([]byte{4})
-		buffer.Respond([]byte{5})
-		buffer.Respond([]byte{6})
-	}()
-	buffer.Request(3, makeRequest([]byte{4}))
-	buffer.Request(3, makeRequest([]byte{5}))
-	buffer.Request(3, makeRequest([]byte{6}))
+	for expected := byte(1); expected <= 6; expected++ {
+		if got := <-received; got != expected {
+			t.Fatalf("response %d received in position %d", got, expected)
+		}
+	}
+}
+
+func TestRequestBufferCancellationAndReentry(t *testing.T) {
+	buffer := MakeRequestBuffer()
+	buffer.Request(1, func([]byte) { t.Error("cancelled request received a response") })
+	if !buffer.CancelRequest(1) || buffer.CancelRequest(1) {
+		t.Fatal("incorrect cancellation result")
+	}
+	buffer.Respond([]byte{2})
+	buffer.Request(2, func(response []byte) {
+		if response[0] != 2 {
+			t.Error("queued response lost")
+		}
+		buffer.Request(3, func(response []byte) {
+			if response[0] != 3 {
+				t.Error("reentrant response lost")
+			}
+		})
+	})
+	buffer.Respond([]byte{3})
 }

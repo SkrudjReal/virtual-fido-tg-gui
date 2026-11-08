@@ -414,52 +414,19 @@ async function checkInstallerStatus() {
     if (!res.ok) throw new Error('Status API error');
     const data = await res.json();
 
-    // Step 1: Testsigning
-    const bTest = document.getElementById('badge-testsigning');
-    const cTest = document.getElementById('step-card-testsigning');
-    const btnTest = document.getElementById('btn-enable-testsigning');
-    if (data.testsigning) {
-      bTest.className = 'm3-chip active';
-      bTest.innerHTML = '&#10003; Enabled';
-      cTest.classList.add('completed');
-      btnTest.style.display = 'none';
-    } else {
-      bTest.className = 'm3-chip';
-      bTest.textContent = 'Disabled';
-      cTest.classList.remove('completed');
-      btnTest.style.display = 'inline-flex';
-    }
-
-    // Step 2: Cert
-    const bCert = document.getElementById('badge-cert');
-    const cCert = document.getElementById('step-card-cert');
-    const btnCert = document.getElementById('btn-install-cert');
-    if (data.certificate) {
-      bCert.className = 'm3-chip active';
-      bCert.innerHTML = '&#10003; Trusted';
-      cCert.classList.add('completed');
-      btnCert.style.display = 'none';
-    } else {
-      bCert.className = 'm3-chip';
-      bCert.textContent = 'Not Installed';
-      cCert.classList.remove('completed');
-      btnCert.style.display = 'inline-flex';
-    }
-
-    // Step 3: Driver
     const bDrv = document.getElementById('badge-driver');
     const cDrv = document.getElementById('step-card-driver');
     const btnDrv = document.getElementById('btn-install-driver');
+    btnDrv.disabled = !!data.installing;
+    btnDrv.textContent = data.installing ? 'Setup running...' : (data.signedInstalled ? 'Repair signed USBip' : 'Install signed USBip');
     if (data.driver) {
       bDrv.className = 'm3-chip active';
-      bDrv.innerHTML = '&#10003; Operational';
+      bDrv.textContent = 'Driver operational';
       cDrv.classList.add('completed');
-      btnDrv.textContent = 'Reinstall Driver';
     } else {
       bDrv.className = 'm3-chip';
-      bDrv.textContent = 'Not Installed';
+      bDrv.textContent = data.signedInstalled ? 'Restart or repair required' : 'Not installed';
       cDrv.classList.remove('completed');
-      btnDrv.textContent = 'Install Driver';
     }
 
     // Step 4: Loopback / Port
@@ -478,7 +445,7 @@ async function checkInstallerStatus() {
     // Overall banner
     const overallChip = document.getElementById('wizard-overall-chip');
     const overallText = document.getElementById('wizard-overall-text');
-    if (data.testsigning && data.certificate && data.driver) {
+    if (data.driver) {
       overallChip.className = 'm3-chip active';
       overallText.textContent = 'SYSTEM READY';
       appendTerminal('[SUCCESS] All kernel prerequisites and USB/IP drivers are operational.', 'success');
@@ -492,62 +459,21 @@ async function checkInstallerStatus() {
   }
 }
 
-async function enableTestsigning() {
-  appendTerminal('[ACTION] Running: bcdedit.exe /set testsigning on...', 'cmd');
-  try {
-    const res = await fetch('/api/installer/testsigning', { method: 'POST' });
-    const data = await res.json();
-    appendTerminal(data.output || 'Testsigning setting updated.', data.success ? 'success' : 'err');
-    if (data.success) {
-      showToast('Testsigning enabled. PC restart may be required if first time.');
-    } else {
-      showToast('Error enabling testsigning (Run as Administrator)');
-    }
-    checkInstallerStatus();
-  } catch (e) {
-    appendTerminal(`[ERROR] ${e.message}`, 'err');
-  }
-}
-
-async function installCert() {
-  appendTerminal('[ACTION] Running: certutil -addstore -f "Root" usbip_test.pfx...', 'cmd');
-  try {
-    const res = await fetch('/api/installer/cert', { method: 'POST' });
-    const data = await res.json();
-    appendTerminal(data.output || 'Certificate added to Root store.', data.success ? 'success' : 'err');
-    showToast(data.success ? 'USB/IP Root Certificate Installed!' : 'Certificate installation failed');
-    checkInstallerStatus();
-  } catch (e) {
-    appendTerminal(`[ERROR] ${e.message}`, 'err');
-  }
-}
-
 async function installDriver() {
-  appendTerminal('[ACTION] Running: usbip.exe install -u (Installing VHCI UDE driver)...', 'cmd');
+  const button = document.getElementById('btn-install-driver');
+  button.disabled = true;
+  appendTerminal('[ACTION] Verifying bundled signed USBip installer; complete its setup wizard. No automatic restart.', 'cmd');
   try {
     const res = await fetch('/api/installer/driver', { method: 'POST' });
     const data = await res.json();
     appendTerminal(data.output || 'Driver installation completed.', data.success ? 'success' : 'err');
-    showToast(data.success ? 'VHCI Driver Installed Successfully!' : 'Driver installation returned errors');
+    showToast(data.success ? 'Signed USBip installed. Restart Windows before starting the token.' : 'Setup did not complete; see diagnostics');
     checkInstallerStatus();
     fetchStatus();
   } catch (e) {
     appendTerminal(`[ERROR] ${e.message}`, 'err');
-  }
-}
-
-async function uninstallDriver() {
-  if (!confirm('Are you sure you want to uninstall the USB/IP VHCI driver?')) return;
-  appendTerminal('[ACTION] Running: usbip.exe uninstall -u...', 'cmd');
-  try {
-    const res = await fetch('/api/installer/uninstall', { method: 'POST' });
-    const data = await res.json();
-    appendTerminal(data.output || 'Driver uninstalled.', 'out');
-    showToast('Driver uninstalled');
-    checkInstallerStatus();
-    fetchStatus();
-  } catch (e) {
-    appendTerminal(`[ERROR] ${e.message}`, 'err');
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -647,6 +573,7 @@ async function togglePINProtection() {
       body: JSON.stringify({ action: chk.checked ? 'enable' : 'disable' })
     });
     const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'PIN setting was not saved');
     showToast(chk.checked ? 'PIN Protection Enabled' : 'PIN Protection Disabled');
   } catch (e) {
     showToast('Failed to change PIN protection');
@@ -657,8 +584,8 @@ async function togglePINProtection() {
 async function saveNewPIN() {
   const input = document.getElementById('new-pin-input');
   const val = input.value.trim();
-  if (val.length < 4 || isNaN(val)) {
-    showToast('PIN must be at least 4 digits');
+  if (!/^[0-9]{4,8}$/.test(val)) {
+    showToast('PIN must contain 4 to 8 digits');
     return;
   }
   try {

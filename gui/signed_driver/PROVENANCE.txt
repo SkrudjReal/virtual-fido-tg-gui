@@ -1,0 +1,8 @@
+Unmodified upstream release asset: USBip-0.9.8.1-x64.exe
+Source: https://github.com/vadimgrn/usbip-win2/releases/tag/v.0.9.8.1
+Download: https://github.com/vadimgrn/usbip-win2/releases/download/v.0.9.8.1/USBip-0.9.8.1-x64.exe
+SHA-256: 38cad6d4432b52d5bb9409d9ad03b72fdffc4ada4cd3a48fbeca1a2752a8518a
+Upstream provides Microsoft-signed USB/IP drivers. The installer is signed by
+Cloudyne Systems (Scheibling Consulting AB). Its SHA-256 and Authenticode trust
+are checked before launching it. No driver is rebuilt or re-signed here.
+The installer presents the upstream license in its normal setup wizard.

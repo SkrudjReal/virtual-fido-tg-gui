@@ -170,8 +170,8 @@ func encodeECDSAPublicKey(publicKey *ecdsa.PublicKey) []byte {
 		KeyType:   int8(COSE_KEY_TYPE_EC2),
 		Algorithm: int8(alg),
 		Curve:     int8(curve),
-		X:         publicKey.X.Bytes(),
-		Y:         publicKey.Y.Bytes(),
+		X:         publicKey.X.FillBytes(make([]byte, 32)),
+		Y:         publicKey.Y.FillBytes(make([]byte, 32)),
 	}
 	return util.MarshalCBOR(key)
 }

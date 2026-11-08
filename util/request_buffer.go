@@ -5,6 +5,7 @@ import "sync"
 type RequestBuffer struct {
 	lock           *sync.Mutex
 	waitingForData map[uint32]func([]byte)
+	requestOrder   []uint32
 	responses      [][]byte
 }
 
@@ -19,14 +20,18 @@ func MakeRequestBuffer() *RequestBuffer {
 
 func (buffer *RequestBuffer) Request(id uint32, request func(response []byte)) bool {
 	buffer.lock.Lock()
-	defer buffer.lock.Unlock()
 	if len(buffer.responses) > 0 {
 		response := buffer.responses[0]
 		buffer.responses = buffer.responses[1:]
+		buffer.lock.Unlock()
 		request(response)
 		return true
 	} else {
+		if _, exists := buffer.waitingForData[id]; !exists {
+			buffer.requestOrder = append(buffer.requestOrder, id)
+		}
 		buffer.waitingForData[id] = request
+		buffer.lock.Unlock()
 		return false
 	}
 }
@@ -36,6 +41,12 @@ func (buffer *RequestBuffer) CancelRequest(id uint32) bool {
 	defer buffer.lock.Unlock()
 	if _, ok := buffer.waitingForData[id]; ok {
 		delete(buffer.waitingForData, id)
+		for i, pendingID := range buffer.requestOrder {
+			if pendingID == id {
+				buffer.requestOrder = append(buffer.requestOrder[:i], buffer.requestOrder[i+1:]...)
+				break
+			}
+		}
 		return true
 	} else {
 		return false
@@ -60,12 +71,10 @@ func (buffer *RequestBuffer) Respond(data []byte) {
 	}
 
 	if len(buffer.waitingForData) > 0 {
-		// Get first waiting request
-		var id uint32
-		var request func([]byte)
-		for id, request = range buffer.waitingForData {
-			break
-		}
+		// USB interrupt reads must receive HID packets in submission order.
+		id := buffer.requestOrder[0]
+		buffer.requestOrder = buffer.requestOrder[1:]
+		request := buffer.waitingForData[id]
 		delete(buffer.waitingForData, id)
 		buffer.lock.Unlock()
 		request(data)
