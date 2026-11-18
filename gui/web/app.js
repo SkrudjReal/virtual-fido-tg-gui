@@ -88,6 +88,8 @@ function connectSSE() {
     }
   });
 
+  evtSource.addEventListener('vault_changed', () => loadIdentities());
+
   evtSource.onerror = () => {
     // reconnects automatically
   };
@@ -391,7 +393,7 @@ async function respondApproval(approved) {
   pendingApproval = null;
 
   try {
-    await fetch('/api/approve', {
+    const res = await fetch('/api/approve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -400,9 +402,13 @@ async function respondApproval(approved) {
         selectedIndex: selectedAccountIndex
       })
     });
-    showToast(approved ? 'Request approved' : 'Request denied');
+    if (!res.ok) throw new Error(await res.text());
+    const result = await res.json();
+    if (!result.success) throw new Error('Approval was not accepted');
+    showToast(approved ? 'Approval sent; wait for the website to finish' : 'Request denied');
   } catch (e) {
     console.error('Error sending approval response', e);
+    showToast(e.message || 'Failed to send approval');
   }
 }
 

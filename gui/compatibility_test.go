@@ -168,6 +168,32 @@ func TestAccountSelectionRespectsDenial(t *testing.T) {
 	}
 }
 
+func TestExpiredApprovalIsRejected(t *testing.T) {
+	s := &Server{}
+	w := httptest.NewRecorder()
+	s.apiApprove(w, httptest.NewRequest(http.MethodPost, "/api/approve", strings.NewReader(`{"id":"expired","approved":true}`)))
+	if w.Code != http.StatusGone {
+		t.Fatalf("expired request reported success: status %d, body %s", w.Code, w.Body.String())
+	}
+}
+
+func TestVaultSaveNotifiesUIAfterPersistence(t *testing.T) {
+	s := NewServer(filepath.Join(t.TempDir(), "vault.json"), "isolated-test-vault")
+	events := make(chan string, 8)
+	s.sseClients[events] = true
+	s.client.SetPIN([]byte("123456"))
+	for len(events) > 0 {
+		if strings.HasPrefix(<-events, "event: vault_changed\n") {
+			reloaded := NewServer(s.vaultFilename, s.vaultPassphrase)
+			if reloaded.client.PINHash() == nil {
+				t.Fatal("UI was notified before the vault was persisted")
+			}
+			return
+		}
+	}
+	t.Fatal("saved vault did not notify UI")
+}
+
 func TestDiagnosticsExcludeRawProtocolAndVault(t *testing.T) {
 	s := NewServer(filepath.Join(t.TempDir(), "private-vault.json"), "private-passphrase")
 	s.Write([]byte("[CTAP] RAW payload that must not be exported\n"))

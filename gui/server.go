@@ -123,7 +123,8 @@ func (s *Server) initClient() {
 	encryptionKey := sha256.Sum256([]byte("test"))
 
 	// Pipe virtual_fido logs into Server log distributor
-	mw := io.MultiWriter(os.Stdout, s)
+	// Capture first: Windows GUI builds may have no writable stdout handle.
+	mw := io.MultiWriter(s, os.Stdout)
 	virtual_fido.SetLogOutput(mw)
 	virtual_fido.SetLogLevel(util.LogLevelDebug)
 
@@ -293,6 +294,8 @@ func (s *Server) SaveData(data []byte) {
 	util.CheckErr(f.Sync(), "Could not sync vault")
 	util.CheckErr(f.Close(), "Could not close vault")
 	util.CheckErr(os.Rename(f.Name(), s.vaultFilename), "Could not replace vault")
+	fmt.Fprintln(s, "[DIAGNOSTIC] Vault saved")
+	s.broadcastSSE("vault_changed", "{}")
 }
 
 func (s *Server) RetrieveData() []byte {
@@ -514,7 +517,7 @@ func (s *Server) apiDiagnostics(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.queryPortInternal()
 	report := map[string]interface{}{
-		"build": "signed-mvp-20261107-relaunch", "platform": runtime.GOOS, "architecture": runtime.GOARCH,
+		"build": "signed-mvp-20261118-approval", "platform": runtime.GOOS, "architecture": runtime.GOARCH,
 		"backend": "usbip-win2-signed", "signedInstalled": installedUSBIPDir() != "", "running": s.running, "attached": s.attached, "port": s.activePort,
 		"pinEnabled": s.client.SupportsPIN(), "pinConfigured": s.client.PINHash() != nil,
 	}
@@ -632,6 +635,13 @@ func (s *Server) apiApprove(w http.ResponseWriter, r *http.Request) {
 
 	s.pendingApprovalMu.Lock()
 	defer s.pendingApprovalMu.Unlock()
+	_, approvalPending := s.pendingApprovals[resp.ID]
+	_, selectionPending := s.pendingSelections[resp.ID]
+	if !approvalPending && !selectionPending {
+		fmt.Fprintln(s, "[DIAGNOSTIC] Approval rejected: request expired or already answered")
+		http.Error(w, "Request expired or already answered. Retry on the website.", http.StatusGone)
+		return
+	}
 
 	if ch, ok := s.pendingApprovals[resp.ID]; ok {
 		select {
