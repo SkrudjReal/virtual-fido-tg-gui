@@ -46,7 +46,7 @@ Protocol reference: [FIDO CTAP 2.0](https://fidoalliance.org/specs/fido-v2.0-ps-
 
 ## Runtime diagnostics
 
-In the updated application, use **Event Logs → Save diagnostics**, or open `http://127.0.0.1:8080/api/diagnostics`. The endpoint stays available while the app is running and keeps the last 300 diagnostic events in memory. Save the report before closing the app.
+In the updated application, use **Event Logs → Save diagnostics**, or open `http://127.0.0.1:9090/api/diagnostics`. The endpoint stays available while the app is running and keeps the last 300 diagnostic events in memory. Save the report before closing the app.
 
 The report includes build/platform, selected backend, running/attached state, port, PIN enabled/configured booleans, attach/detach failures and CTAP command/status codes. It excludes the vault filename, vault password, PIN/hash/token, private keys, account records and raw protocol packets. The existing live packet viewer remains separate.
 

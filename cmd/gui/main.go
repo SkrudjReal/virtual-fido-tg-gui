@@ -63,7 +63,7 @@ func failStartup(err error, noBrowser bool) {
 func main() {
 	vaultFile := flag.String("vault", "vault.json", "Vault filename")
 	passphrase := flag.String("passphrase", "passphrase", "Vault encryption passphrase")
-	port := flag.Int("port", 8080, "Web server port")
+	port := flag.Int("port", 9090, "Web server port")
 	noBrowser := flag.Bool("no-browser", false, "Do not auto-open browser window")
 	autoStart := flag.Bool("autostart", true, "Automatically start and attach virtual FIDO token on launch")
 	flag.Parse()
